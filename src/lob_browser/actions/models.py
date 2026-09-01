@@ -9,7 +9,9 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal, Self
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
+
+from lob_browser.browser.models import TabInfo
 
 
 class ActionKind(StrEnum):
@@ -184,3 +186,9 @@ class ActionResult(BaseModel):
     before: PageSnapshot
     after: PageSnapshot
     message: str = ""
+    tabs_before: list[TabInfo] = Field(default_factory=list)
+    tabs_after: list[TabInfo] = Field(default_factory=list)
+    opened_tabs: list[TabInfo] = Field(default_factory=list)
+    switched_from_tab_id: str | None = None
+    switched_to_tab_id: str | None = None
+    closed_tab_id: str | None = None

@@ -66,6 +66,8 @@ uv run python -m lob_browser.agent.local_smoke
 
 命令依次验证表单、异步动态列表和多标签页，并将完整 JSONL Trace 写入 `artifacts/local-smoke.jsonl`。
 
+多标签验收使用页面中的真实链接触发新 Page，执行器会自动注册并切换新标签；`ActionResult` 和 Trace 同时记录标签打开、切换与关闭事件。
+
 ## 项目边界
 
 - `lob-browser` 关注网页任务执行，不重复实现 `lob-harness` 的通用 Agent 运行框架。

@@ -171,6 +171,28 @@ class BrowserSession:
             infos.append(await self._tab_info(tab_id))
         return infos
 
+    def tab_ids(self) -> set[str]:
+        return {tab_id for tab_id, page in self._pages.items() if not page.is_closed()}
+
+    async def focus_new_tab(self, previous_tab_ids: set[str], *, timeout_ms: float) -> TabInfo | None:
+        """Focus the newest page created after an action, if one exists."""
+        deadline = asyncio.get_running_loop().time() + min(timeout_ms / 1000, 0.25)
+        while True:
+            new_ids = [tab_id for tab_id in self._pages if tab_id not in previous_tab_ids]
+            if new_ids:
+                tab_id = new_ids[-1]
+                page = self._require_tab(tab_id)
+                self._focus(tab_id)
+                await page.bring_to_front()
+                try:
+                    await page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+                except Exception:
+                    logger.debug("new tab load wait failed tab=%s", tab_id, exc_info=True)
+                return await self._tab_info(tab_id)
+            if asyncio.get_running_loop().time() >= deadline:
+                return None
+            await asyncio.sleep(0.01)
+
     async def new_tab(self, url: str | None = None, *, timeout_ms: float | None = None) -> TabInfo:
         if self._context is None:
             raise SessionNotStartedError("session is not started")

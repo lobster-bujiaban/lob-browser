@@ -35,11 +35,17 @@ async def run_action(session: BrowserSession, action: Action) -> ActionResult:
     """Execute one action and always return a classified result."""
     started = time.perf_counter()
     before = await capture_snapshot(session)
+    tabs_before = await session.list_tabs() if session.started else []
+    current_before = session.current_tab_id
     try:
         timeout_ms = action.timeout_ms if action.timeout_ms is not None else session.config.timeout_ms
         async with asyncio.timeout(timeout_ms / 1000 + 0.5):
             message = await _dispatch(session, action, timeout_ms)
         after = await capture_snapshot(session)
+        tabs_after = await session.list_tabs()
+        before_ids = {tab.tab_id for tab in tabs_before}
+        opened_tabs = [tab for tab in tabs_after if tab.tab_id not in before_ids]
+        current_after = session.current_tab_id
         return ActionResult(
             ok=True,
             action=action,
@@ -47,10 +53,17 @@ async def run_action(session: BrowserSession, action: Action) -> ActionResult:
             before=before,
             after=after,
             message=message,
+            tabs_before=tabs_before,
+            tabs_after=tabs_after,
+            opened_tabs=opened_tabs,
+            switched_from_tab_id=current_before if current_before != current_after else None,
+            switched_to_tab_id=current_after if current_before != current_after else None,
+            closed_tab_id=action.tab_id or current_before if action.kind is ActionKind.CLOSE_TAB else None,
         )
     except Exception as exc:
         kind, error = classify_error(exc)
         after = await capture_snapshot(session)
+        tabs_after = await session.list_tabs() if session.started else []
         logger.info("action failed kind=%s error=%s", kind, error)
         return ActionResult(
             ok=False,
@@ -60,6 +73,8 @@ async def run_action(session: BrowserSession, action: Action) -> ActionResult:
             elapsed_ms=_elapsed_ms(started),
             before=before,
             after=after,
+            tabs_before=tabs_before,
+            tabs_after=tabs_after,
         )
 
 
@@ -127,7 +142,11 @@ async def _dispatch(session: BrowserSession, action: Action, timeout_ms: float) 
             await page.reload(wait_until="domcontentloaded", timeout=timeout_ms)
             return "reloaded"
         case ActionKind.CLICK:
+            previous_tab_ids = session.tab_ids()
             await (await _target(session, page, action, timeout_ms)).click(timeout=timeout_ms)
+            opened = await session.focus_new_tab(previous_tab_ids, timeout_ms=timeout_ms)
+            if opened:
+                return f"clicked {action.selector or action.index}; opened and switched to tab {opened.tab_id}"
             return f"clicked {action.selector or action.index}"
         case ActionKind.TYPE:
             locator = await _target(session, page, action, timeout_ms)

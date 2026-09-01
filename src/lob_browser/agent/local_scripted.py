@@ -13,7 +13,6 @@ class LocalScriptedDecider:
     def __init__(self, fixtures_dir: str | Path) -> None:
         root = Path(fixtures_dir).resolve()
         self.home = (root / "index.html").as_uri()
-        self.detail = (root / "detail.html").as_uri()
 
     async def __call__(self, task: str, observation: Observation, history: list[StepRecord]) -> Decision:
         if "表单" in task:
@@ -21,7 +20,7 @@ class LocalScriptedDecider:
         if "动态列表" in task:
             return self._dynamic(observation)
         if "多标签" in task:
-            return self._tabs(observation)
+            return self._tabs(observation, history)
         return Decision(done=True, success=False, message="unknown local task")
 
     def _form(self, observation: Observation) -> Decision:
@@ -52,12 +51,32 @@ class LocalScriptedDecider:
             return Decision(action=Action.wait(250), thought="wait for async results")
         return self._click(observation, "搜索")
 
-    def _tabs(self, observation: Observation) -> Decision:
+    def _tabs(self, observation: Observation, history: list[StepRecord]) -> Decision:
+        opened = next(
+            (tab for step in history if step.result for tab in step.result.opened_tabs),
+            None,
+        )
+        returned = any(
+            step.action and step.action.kind.value == "switch_tab" and step.result and step.result.ok
+            for step in history
+        )
+        closed = any(
+            step.action and step.action.kind.value == "close_tab" and step.result and step.result.ok
+            for step in history
+        )
         if observation.title == "项目详情" and "LOB-001" in observation.text:
-            return Decision(done=True, success=True, message="new tab detail read")
+            click_step = next((step for step in history if step.result and step.result.opened_tabs), None)
+            original_id = click_step.result.switched_from_tab_id if click_step and click_step.result else None
+            if not original_id:
+                return Decision(done=True, success=False, message="original tab missing")
+            return Decision(action=Action.switch_tab(original_id), thought="detail read; return to original tab")
         if observation.url != self.home:
             return Decision(action=Action.navigate(self.home))
-        return Decision(action=Action.new_tab(self.detail), thought="open detail in a new tab")
+        if opened and returned and not closed:
+            return Decision(action=Action.close_tab(opened.tab_id), thought="close the detail tab")
+        if opened and closed:
+            return Decision(done=True, success=True, message="new tab read, returned, and closed")
+        return self._click(observation, "多标签详情")
 
     def _click_or_home(self, observation: Observation, name: str) -> Decision:
         target = observation.find_name(name)

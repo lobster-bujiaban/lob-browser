@@ -22,6 +22,15 @@ class TabInfo(BaseModel):
     current: bool = False
 
 
+class DialogInfo(BaseModel):
+    type: str
+    message: str
+    default_value: str = ""
+    accepted: bool
+    prompt_text: str | None = None
+    configured: bool = False
+
+
 class SessionInfo(BaseModel):
     session_id: str
     started: bool

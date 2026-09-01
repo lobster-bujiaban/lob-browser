@@ -11,7 +11,7 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, Field, model_validator
 
-from lob_browser.browser.models import TabInfo
+from lob_browser.browser.models import DialogInfo, TabInfo
 
 
 class ActionKind(StrEnum):
@@ -26,6 +26,7 @@ class ActionKind(StrEnum):
     NEW_TAB = "new_tab"
     SWITCH_TAB = "switch_tab"
     CLOSE_TAB = "close_tab"
+    DIALOG = "dialog"
 
 
 class ErrorKind(StrEnum):
@@ -35,6 +36,7 @@ class ErrorKind(StrEnum):
     PAGE_CLOSED = "page_closed"
     TAB_NOT_FOUND = "tab_not_found"
     STALE_ELEMENT = "stale_element"
+    DIALOG_UNHANDLED = "dialog_unhandled"
     UNKNOWN = "unknown"
 
 
@@ -52,6 +54,8 @@ class Action(BaseModel):
     tab_id: str | None = None
     index: int | None = None
     observation_id: str | None = None
+    accept: bool | None = None
+    prompt_text: str | None = None
 
     @model_validator(mode="after")
     def require_fields(self) -> Self:
@@ -66,6 +70,8 @@ class Action(BaseModel):
             raise ValueError("select requires value")
         if self.kind is ActionKind.SWITCH_TAB and not self.tab_id:
             raise ValueError("switch_tab requires tab_id")
+        if self.kind is ActionKind.DIALOG and self.accept is None:
+            raise ValueError("dialog requires accept")
         return self
 
     @classmethod
@@ -170,6 +176,10 @@ class Action(BaseModel):
     def close_tab(cls, tab_id: str | None = None, *, timeout_ms: float | None = None) -> Self:
         return cls(kind=ActionKind.CLOSE_TAB, tab_id=tab_id, timeout_ms=timeout_ms)
 
+    @classmethod
+    def dialog(cls, *, accept: bool, prompt_text: str | None = None) -> Self:
+        return cls(kind=ActionKind.DIALOG, accept=accept, prompt_text=prompt_text)
+
 
 class PageSnapshot(BaseModel):
     url: str = ""
@@ -192,3 +202,4 @@ class ActionResult(BaseModel):
     switched_from_tab_id: str | None = None
     switched_to_tab_id: str | None = None
     closed_tab_id: str | None = None
+    dialogs: list[DialogInfo] = Field(default_factory=list)

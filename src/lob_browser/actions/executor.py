@@ -14,7 +14,7 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
 from playwright.async_api import TimeoutError as PlaywrightTimeout
 
-from lob_browser.actions.errors import ElementNotFoundError, PageClosedError, StaleElementError
+from lob_browser.actions.errors import DialogUnhandledError, ElementNotFoundError, PageClosedError, StaleElementError
 from lob_browser.actions.models import Action, ActionKind, ActionResult, ErrorKind, PageSnapshot
 from lob_browser.browser import BrowserSession, SessionNotStartedError
 from lob_browser.browser.errors import TabError
@@ -37,10 +37,15 @@ async def run_action(session: BrowserSession, action: Action) -> ActionResult:
     before = await capture_snapshot(session)
     tabs_before = await session.list_tabs() if session.started else []
     current_before = session.current_tab_id
+    session.take_dialog_events()
+    dialogs = []
     try:
         timeout_ms = action.timeout_ms if action.timeout_ms is not None else session.config.timeout_ms
         async with asyncio.timeout(timeout_ms / 1000 + 0.5):
             message = await _dispatch(session, action, timeout_ms)
+        dialogs = session.take_dialog_events()
+        if any(not dialog.configured for dialog in dialogs):
+            raise DialogUnhandledError("dialog appeared without a configured policy and was dismissed")
         after = await capture_snapshot(session)
         tabs_after = await session.list_tabs()
         before_ids = {tab.tab_id for tab in tabs_before}
@@ -59,8 +64,10 @@ async def run_action(session: BrowserSession, action: Action) -> ActionResult:
             switched_from_tab_id=current_before if current_before != current_after else None,
             switched_to_tab_id=current_after if current_before != current_after else None,
             closed_tab_id=action.tab_id or current_before if action.kind is ActionKind.CLOSE_TAB else None,
+            dialogs=dialogs,
         )
     except Exception as exc:
+        dialogs = dialogs or session.take_dialog_events()
         kind, error = classify_error(exc)
         after = await capture_snapshot(session)
         tabs_after = await session.list_tabs() if session.started else []
@@ -75,6 +82,7 @@ async def run_action(session: BrowserSession, action: Action) -> ActionResult:
             after=after,
             tabs_before=tabs_before,
             tabs_after=tabs_after,
+            dialogs=dialogs,
         )
 
 
@@ -106,6 +114,8 @@ def classify_error(exc: BaseException) -> tuple[ErrorKind, str]:
         return ErrorKind.PAGE_CLOSED, str(exc)
     if isinstance(exc, StaleElementError):
         return ErrorKind.STALE_ELEMENT, str(exc)
+    if isinstance(exc, DialogUnhandledError):
+        return ErrorKind.DIALOG_UNHANDLED, str(exc)
     if isinstance(exc, ElementNotFoundError):
         return ErrorKind.ELEMENT_NOT_FOUND, str(exc)
     if isinstance(exc, TabError):
@@ -116,6 +126,10 @@ def classify_error(exc: BaseException) -> tuple[ErrorKind, str]:
 
 
 async def _dispatch(session: BrowserSession, action: Action, timeout_ms: float) -> str:
+    if action.kind is ActionKind.DIALOG:
+        session.arm_dialog(accept=bool(action.accept), prompt_text=action.prompt_text)
+        mode = "accept" if action.accept else "dismiss"
+        return f"armed next dialog: {mode}"
     if action.kind is ActionKind.NEW_TAB:
         if not session.started:
             raise PageClosedError("session is not started")

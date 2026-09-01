@@ -23,3 +23,7 @@ class PageClosedError(ActionError):
 
 class StaleElementError(ActionError):
     """An element index is not valid for the current observation."""
+
+
+class DialogUnhandledError(ActionError):
+    """A dialog appeared without a configured handling policy."""

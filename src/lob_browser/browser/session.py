@@ -25,10 +25,10 @@ from pathlib import Path
 from typing import Self
 from uuid import uuid4
 
-from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
+from playwright.async_api import Browser, BrowserContext, Dialog, Page, Playwright, async_playwright
 
 from lob_browser.browser.errors import LastTabError, SessionError, SessionNotStartedError, TabNotFoundError
-from lob_browser.browser.models import SessionConfig, SessionInfo, TabInfo
+from lob_browser.browser.models import DialogInfo, SessionConfig, SessionInfo, TabInfo
 
 logger = logging.getLogger("lob_browser.browser")
 
@@ -62,6 +62,8 @@ class BrowserSession:
         self._owns_browser = False
         self._started = False
         self._observation = None
+        self._dialog_policy: tuple[bool, str | None] | None = None
+        self._dialog_events: list[DialogInfo] = []
 
     @property
     def observation(self):
@@ -69,6 +71,14 @@ class BrowserSession:
 
     def set_observation(self, observation) -> None:
         self._observation = observation
+
+    def arm_dialog(self, *, accept: bool, prompt_text: str | None = None) -> None:
+        self._dialog_policy = (accept, prompt_text)
+
+    def take_dialog_events(self) -> list[DialogInfo]:
+        events = self._dialog_events
+        self._dialog_events = []
+        return events
 
     @property
     def session_id(self) -> str:
@@ -235,7 +245,28 @@ class BrowserSession:
         tab_id = uuid4().hex[:8]
         self._pages[tab_id] = page
         page.on("close", lambda _closed: self._forget_page(tab_id))
+        page.on("dialog", self._on_dialog)
         return tab_id
+
+    async def _on_dialog(self, dialog: Dialog) -> None:
+        policy = self._dialog_policy
+        self._dialog_policy = None
+        configured = policy is not None
+        accept, prompt_text = policy if policy is not None else (False, None)
+        self._dialog_events.append(
+            DialogInfo(
+                type=dialog.type,
+                message=dialog.message,
+                default_value=dialog.default_value,
+                accepted=accept,
+                prompt_text=prompt_text,
+                configured=configured,
+            )
+        )
+        if accept:
+            await dialog.accept(prompt_text)
+        else:
+            await dialog.dismiss()
 
     def _forget_page(self, tab_id: str) -> None:
         self._pages.pop(tab_id, None)
@@ -379,6 +410,8 @@ class BrowserSession:
         self._owns_browser = False
         self._cdp_url = None
         self._observation = None
+        self._dialog_policy = None
+        self._dialog_events = []
 
         await _close_quietly(page)
         await _close_quietly(context)

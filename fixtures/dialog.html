@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>弹窗任务</title></head>
+<body>
+  <h1>弹窗处理</h1>
+  <button id="alert">显示 alert</button>
+  <button id="confirm">显示 confirm</button>
+  <button id="prompt">显示 prompt</button>
+  <button id="unconfigured">未配置弹窗</button>
+  <p id="result" role="status">等待操作</p>
+  <script>
+    const output = document.querySelector('#result');
+    document.querySelector('#alert').addEventListener('click', () => {
+      alert('请确认提示');
+      output.textContent = 'alert 已确认';
+    });
+    document.querySelector('#confirm').addEventListener('click', () => {
+      output.textContent = confirm('是否继续？') ? 'confirm 已接受' : 'confirm 已拒绝';
+    });
+    document.querySelector('#prompt').addEventListener('click', () => {
+      const value = prompt('请输入代号', '默认值');
+      output.textContent = `prompt:${value}`;
+    });
+    document.querySelector('#unconfigured').addEventListener('click', () => {
+      output.textContent = confirm('未配置策略') ? '意外接受' : '默认拒绝';
+    });
+  </script>
+</body>
+</html>

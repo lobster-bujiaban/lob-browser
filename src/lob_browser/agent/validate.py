@@ -38,4 +38,6 @@ def fingerprint(action: Action) -> tuple[object, ...]:
         action.text,
         action.value,
         action.tab_id,
+        action.accept,
+        action.prompt_text,
     )

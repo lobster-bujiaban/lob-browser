@@ -68,6 +68,8 @@ uv run python -m lob_browser.agent.local_smoke
 
 多标签验收使用页面中的真实链接触发新 Page，执行器会自动注册并切换新标签；`ActionResult` 和 Trace 同时记录标签打开、切换与关闭事件。
 
+弹窗处理通过 `Action.dialog(accept=..., prompt_text=...)` 配置下一次 alert、confirm 或 prompt；未配置策略的弹窗会被安全拒绝，并返回 `dialog_unhandled`，所有弹窗内容和处理结果都会进入 `ActionResult` 与 Trace。
+
 ## 项目边界
 
 - `lob-browser` 关注网页任务执行，不重复实现 `lob-harness` 的通用 Agent 运行框架。

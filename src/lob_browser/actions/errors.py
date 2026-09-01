@@ -19,3 +19,7 @@ class ActionTimeoutError(ActionError):
 
 class PageClosedError(ActionError):
     """The target page was closed before or during the action."""
+
+
+class StaleElementError(ActionError):
+    """An element index is not valid for the current observation."""

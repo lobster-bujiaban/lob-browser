@@ -61,6 +61,14 @@ class BrowserSession:
         self._cdp_url: str | None = None
         self._owns_browser = False
         self._started = False
+        self._observation = None
+
+    @property
+    def observation(self):
+        return self._observation
+
+    def set_observation(self, observation) -> None:
+        self._observation = observation
 
     @property
     def session_id(self) -> str:
@@ -348,6 +356,7 @@ class BrowserSession:
         owns_browser = self._owns_browser
         self._owns_browser = False
         self._cdp_url = None
+        self._observation = None
 
         await _close_quietly(page)
         await _close_quietly(context)

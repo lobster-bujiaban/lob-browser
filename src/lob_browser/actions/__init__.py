@@ -1,4 +1,4 @@
-from lob_browser.actions.errors import ActionError, ElementNotFoundError, PageClosedError
+from lob_browser.actions.errors import ActionError, ElementNotFoundError, PageClosedError, StaleElementError
 from lob_browser.actions.executor import run_action
 from lob_browser.actions.models import Action, ActionKind, ActionResult, ErrorKind, PageSnapshot
 
@@ -11,5 +11,6 @@ __all__ = [
     "ErrorKind",
     "PageClosedError",
     "PageSnapshot",
+    "StaleElementError",
     "run_action",
 ]

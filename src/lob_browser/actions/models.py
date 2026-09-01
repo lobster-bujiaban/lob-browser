@@ -32,6 +32,7 @@ class ErrorKind(StrEnum):
     TIMEOUT = "timeout"
     PAGE_CLOSED = "page_closed"
     TAB_NOT_FOUND = "tab_not_found"
+    STALE_ELEMENT = "stale_element"
     UNKNOWN = "unknown"
 
 
@@ -47,13 +48,16 @@ class Action(BaseModel):
     timeout_ms: float | None = None
     clear: bool = True
     tab_id: str | None = None
+    index: int | None = None
+    observation_id: str | None = None
 
     @model_validator(mode="after")
     def require_fields(self) -> Self:
         if self.kind is ActionKind.NAVIGATE and not self.url:
             raise ValueError("navigate requires url")
-        if self.kind in {ActionKind.CLICK, ActionKind.TYPE, ActionKind.SELECT} and not self.selector:
-            raise ValueError(f"{self.kind} requires selector")
+        if self.kind in {ActionKind.CLICK, ActionKind.TYPE, ActionKind.SELECT}:
+            if not self.selector and self.index is None:
+                raise ValueError(f"{self.kind} requires selector or index")
         if self.kind is ActionKind.TYPE and self.text is None:
             raise ValueError("type requires text")
         if self.kind is ActionKind.SELECT and self.value is None:
@@ -75,16 +79,61 @@ class Action(BaseModel):
         return cls(kind=ActionKind.RELOAD, timeout_ms=timeout_ms)
 
     @classmethod
-    def click(cls, selector: str, *, timeout_ms: float | None = None) -> Self:
-        return cls(kind=ActionKind.CLICK, selector=selector, timeout_ms=timeout_ms)
+    def click(
+        cls,
+        selector: str | None = None,
+        *,
+        index: int | None = None,
+        observation_id: str | None = None,
+        timeout_ms: float | None = None,
+    ) -> Self:
+        return cls(
+            kind=ActionKind.CLICK,
+            selector=selector,
+            index=index,
+            observation_id=observation_id,
+            timeout_ms=timeout_ms,
+        )
 
     @classmethod
-    def type_text(cls, selector: str, text: str, *, clear: bool = True, timeout_ms: float | None = None) -> Self:
-        return cls(kind=ActionKind.TYPE, selector=selector, text=text, clear=clear, timeout_ms=timeout_ms)
+    def type_text(
+        cls,
+        selector: str | None = None,
+        text: str = "",
+        *,
+        index: int | None = None,
+        observation_id: str | None = None,
+        clear: bool = True,
+        timeout_ms: float | None = None,
+    ) -> Self:
+        return cls(
+            kind=ActionKind.TYPE,
+            selector=selector,
+            text=text,
+            index=index,
+            observation_id=observation_id,
+            clear=clear,
+            timeout_ms=timeout_ms,
+        )
 
     @classmethod
-    def select(cls, selector: str, value: str, *, timeout_ms: float | None = None) -> Self:
-        return cls(kind=ActionKind.SELECT, selector=selector, value=value, timeout_ms=timeout_ms)
+    def select(
+        cls,
+        selector: str | None = None,
+        value: str | None = None,
+        *,
+        index: int | None = None,
+        observation_id: str | None = None,
+        timeout_ms: float | None = None,
+    ) -> Self:
+        return cls(
+            kind=ActionKind.SELECT,
+            selector=selector,
+            value=value,
+            index=index,
+            observation_id=observation_id,
+            timeout_ms=timeout_ms,
+        )
 
     @classmethod
     def scroll(

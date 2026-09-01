@@ -14,7 +14,7 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
 from playwright.async_api import TimeoutError as PlaywrightTimeout
 
-from lob_browser.actions.errors import ElementNotFoundError, PageClosedError
+from lob_browser.actions.errors import ElementNotFoundError, PageClosedError, StaleElementError
 from lob_browser.actions.models import Action, ActionKind, ActionResult, ErrorKind, PageSnapshot
 from lob_browser.browser import BrowserSession, SessionNotStartedError
 from lob_browser.browser.errors import TabError
@@ -89,6 +89,8 @@ async def capture_snapshot(session: BrowserSession) -> PageSnapshot:
 def classify_error(exc: BaseException) -> tuple[ErrorKind, str]:
     if isinstance(exc, (PageClosedError, SessionNotStartedError)) or _is_page_closed(exc):
         return ErrorKind.PAGE_CLOSED, str(exc)
+    if isinstance(exc, StaleElementError):
+        return ErrorKind.STALE_ELEMENT, str(exc)
     if isinstance(exc, ElementNotFoundError):
         return ErrorKind.ELEMENT_NOT_FOUND, str(exc)
     if isinstance(exc, TabError):
@@ -125,27 +127,27 @@ async def _dispatch(session: BrowserSession, action: Action, timeout_ms: float) 
             await page.reload(wait_until="domcontentloaded", timeout=timeout_ms)
             return "reloaded"
         case ActionKind.CLICK:
-            await (await _attached(page, action.selector, timeout_ms)).click(timeout=timeout_ms)
-            return f"clicked {action.selector}"
+            await (await _target(session, page, action, timeout_ms)).click(timeout=timeout_ms)
+            return f"clicked {action.selector or action.index}"
         case ActionKind.TYPE:
-            locator = await _attached(page, action.selector, timeout_ms)
+            locator = await _target(session, page, action, timeout_ms)
             if action.clear:
                 await locator.fill(action.text or "", timeout=timeout_ms)
             else:
                 await locator.press_sequentially(action.text or "", timeout=timeout_ms)
-            return f"typed into {action.selector}"
+            return f"typed into {action.selector or action.index}"
         case ActionKind.SELECT:
-            await (await _attached(page, action.selector, timeout_ms)).select_option(
+            await (await _target(session, page, action, timeout_ms)).select_option(
                 value=action.value,
                 timeout=timeout_ms,
             )
-            return f"selected {action.value} on {action.selector}"
+            return f"selected {action.value} on {action.selector or action.index}"
         case ActionKind.SCROLL:
-            if action.selector:
-                await (await _attached(page, action.selector, timeout_ms)).scroll_into_view_if_needed(
+            if action.selector or action.index is not None:
+                await (await _target(session, page, action, timeout_ms)).scroll_into_view_if_needed(
                     timeout=timeout_ms,
                 )
-                return f"scrolled {action.selector} into view"
+                return f"scrolled {action.selector or action.index} into view"
             delta = action.amount if action.amount is not None else 800
             if action.direction == "up":
                 delta = -abs(delta)
@@ -157,6 +159,25 @@ async def _dispatch(session: BrowserSession, action: Action, timeout_ms: float) 
             return f"waited {duration_ms}ms"
 
 
+async def _target(session: BrowserSession, page: Page, action: Action, timeout_ms: float):
+    if action.index is None:
+        return await _attached(page, action.selector, timeout_ms)
+    observation = session.observation
+    if observation is None:
+        raise StaleElementError("no observation")
+    if action.observation_id and action.observation_id != observation.observation_id:
+        raise StaleElementError("observation_id mismatch")
+    if _normalize_url(page.url) != _normalize_url(observation.url):
+        raise StaleElementError("page changed since observation")
+    if observation.element(action.index) is None:
+        raise ElementNotFoundError(f"index={action.index}")
+    selector = f'[data-lob-obs="{observation.observation_id}"][data-lob-i="{action.index}"]'
+    try:
+        return await _attached(page, selector, timeout_ms)
+    except ElementNotFoundError as exc:
+        raise StaleElementError(f"index {action.index} is stale") from exc
+
+
 async def _attached(page: Page, selector: str | None, timeout_ms: float):
     if not selector:
         raise ElementNotFoundError("<empty>")
@@ -166,6 +187,10 @@ async def _attached(page: Page, selector: str | None, timeout_ms: float):
     except PlaywrightTimeout as exc:
         raise ElementNotFoundError(selector) from exc
     return locator.first
+
+
+def _normalize_url(url: str) -> str:
+    return url.rstrip("/")
 
 
 def _is_page_closed(exc: BaseException) -> bool:

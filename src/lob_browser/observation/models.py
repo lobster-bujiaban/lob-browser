@@ -46,6 +46,7 @@ class InteractiveElement(BaseModel):
 
 class Observation(BaseModel):
     observation_id: str
+    page_version: int = 0
     url: str
     title: str
     text: str

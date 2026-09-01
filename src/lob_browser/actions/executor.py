@@ -169,6 +169,9 @@ async def _target(session: BrowserSession, page: Page, action: Action, timeout_m
         raise StaleElementError("observation_id mismatch")
     if _normalize_url(page.url) != _normalize_url(observation.url):
         raise StaleElementError("page changed since observation")
+    page_version = await page.evaluate("() => window.__lobPageVersion || 0")
+    if page_version != observation.page_version:
+        raise StaleElementError("DOM changed since observation")
     if observation.element(action.index) is None:
         raise ElementNotFoundError(f"index={action.index}")
     selector = f'[data-lob-obs="{observation.observation_id}"][data-lob-i="{action.index}"]'

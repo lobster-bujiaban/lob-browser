@@ -6,10 +6,12 @@ Mapped from browser-use 0.13.7 Agent.step; no EventBus, one structured action pe
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 from lob_browser.actions import run_action
 from lob_browser.agent.models import AgentResult, Decision, StepRecord, StopReason
 from lob_browser.agent.validate import InvalidDecision, fingerprint, validate_decision
+from lob_browser.agent.trace import TraceWriter
 from lob_browser.browser import BrowserSession
 from lob_browser.observation import Observation, observe
 
@@ -23,26 +25,34 @@ async def run_task(
     *,
     max_steps: int = 8,
     max_tokens: int = 50_000,
+    trace_path: str | Path | None = None,
 ) -> AgentResult:
     steps: list[StepRecord] = []
     tokens_used = 0
     repeats = 0
+    trace = TraceWriter(trace_path) if trace_path else None
+    if trace:
+        trace.write("task_started", task=task, max_steps=max_steps, max_tokens=max_tokens)
 
     for step_no in range(1, max_steps + 1):
         observation = await observe(session)
+        if trace:
+            trace.write("observation", step=step_no, observation=observation)
         tokens_used += observation.token_estimate
         if tokens_used > max_tokens:
-            return AgentResult(
+            return _finish(trace, AgentResult(
                 ok=False,
                 stop_reason=StopReason.TOKEN_BUDGET,
                 message=f"token budget {max_tokens} exceeded",
                 steps=steps,
                 tokens_used=tokens_used,
-            )
+            ))
 
         try:
             decision = await decider(task, observation, steps)
             decision = validate_decision(decision, observation)
+            if trace:
+                trace.write("decision", step=step_no, decision=decision)
         except InvalidDecision as exc:
             steps.append(
                 StepRecord(
@@ -80,13 +90,13 @@ async def run_task(
                     token_estimate=observation.token_estimate,
                 )
             )
-            return AgentResult(
+            return _finish(trace, AgentResult(
                 ok=decision.success,
                 stop_reason=StopReason.DONE if decision.success else StopReason.FAILED,
                 message=decision.message or decision.thought,
                 steps=steps,
                 tokens_used=tokens_used,
-            )
+            ))
 
         action = decision.action
         assert action is not None
@@ -105,16 +115,18 @@ async def run_task(
                 )
             )
             if repeats >= 3:
-                return AgentResult(
+                return _finish(trace, AgentResult(
                     ok=False,
                     stop_reason=StopReason.REPEATED_FAILURE,
                     message="same failed action repeated",
                     steps=steps,
                     tokens_used=tokens_used,
-                )
+                ))
             continue
 
         result = await run_action(session, action)
+        if trace:
+            trace.write("action_result", step=step_no, result=result)
         steps.append(
             StepRecord(
                 step=step_no,
@@ -129,13 +141,19 @@ async def run_task(
             )
         )
 
-    return AgentResult(
+    return _finish(trace, AgentResult(
         ok=False,
         stop_reason=StopReason.MAX_STEPS,
         message=f"stopped after {max_steps} steps",
         steps=steps,
         tokens_used=tokens_used,
-    )
+    ))
+
+
+def _finish(trace: TraceWriter | None, result: AgentResult) -> AgentResult:
+    if trace:
+        trace.write("task_finished", result=result)
+    return result
 
 
 def _is_repeat_failure(action, steps: list[StepRecord]) -> bool:

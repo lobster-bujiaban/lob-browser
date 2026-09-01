@@ -73,6 +73,24 @@ COLLECT_JS = r"""() => {
     root.querySelectorAll('*').forEach(consider);
   };
 
+  if (!window.__lobPageVersionInstalled) {
+    window.__lobPageVersionInstalled = true;
+    window.__lobPageVersion = 0;
+    const observer = new MutationObserver((records) => {
+      const meaningful = records.some((record) => {
+        if (record.type !== 'attributes') return true;
+        return record.attributeName !== 'data-lob-obs' && record.attributeName !== 'data-lob-i';
+      });
+      if (meaningful) window.__lobPageVersion += 1;
+    });
+    observer.observe(document.documentElement, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+      attributes: true,
+    });
+  }
+
   document.querySelectorAll('[data-lob-obs]').forEach((el) => {
     el.removeAttribute('data-lob-obs');
     el.removeAttribute('data-lob-i');
@@ -120,7 +138,7 @@ COLLECT_JS = r"""() => {
   });
 
   const text = (document.body && document.body.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 4000);
-  return { observation_id: observationId, text, elements };
+  return { observation_id: observationId, page_version: window.__lobPageVersion, text, elements };
 }"""
 
 
@@ -153,6 +171,7 @@ async def observe(session: BrowserSession) -> Observation:
     text = str(raw.get("text") or "")[:_TEXT_CHARS]
     observation = Observation(
         observation_id=str(raw.get("observation_id") or uuid4().hex[:8]),
+        page_version=int(raw.get("page_version") or 0),
         url=page.url,
         title=await page.title(),
         text=text,

@@ -19,6 +19,7 @@ class TabInfo(BaseModel):
     tab_id: str
     url: str = "about:blank"
     title: str = ""
+    current: bool = False
 
 
 class SessionInfo(BaseModel):
@@ -27,4 +28,5 @@ class SessionInfo(BaseModel):
     owns_browser: bool
     cdp_url: str | None = None
     context_id: str | None = None
+    current_tab_id: str | None = None
     tabs: list[TabInfo] = Field(default_factory=list)

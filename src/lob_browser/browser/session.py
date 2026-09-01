@@ -27,7 +27,7 @@ from uuid import uuid4
 
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
 
-from lob_browser.browser.errors import SessionError, SessionNotStartedError
+from lob_browser.browser.errors import LastTabError, SessionError, SessionNotStartedError, TabNotFoundError
 from lob_browser.browser.models import SessionConfig, SessionInfo, TabInfo
 
 logger = logging.getLogger("lob_browser.browser")
@@ -54,7 +54,8 @@ class BrowserSession:
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
         self._page: Page | None = None
-        self._tab_id: str | None = None
+        self._pages: dict[str, Page] = {}
+        self._current_tab_id: str | None = None
         self._process: asyncio.subprocess.Process | None = None
         self._profile_dir: Path | None = None
         self._cdp_url: str | None = None
@@ -76,6 +77,14 @@ class BrowserSession:
     @property
     def owns_browser(self) -> bool:
         return self._owns_browser
+
+    @property
+    def config(self) -> SessionConfig:
+        return self._config
+
+    @property
+    def current_tab_id(self) -> str | None:
+        return self._current_tab_id
 
     @property
     def page(self) -> Page:
@@ -130,17 +139,104 @@ class BrowserSession:
             await self._cleanup_unlocked()
 
     def info(self) -> SessionInfo:
-        tabs: list[TabInfo] = []
-        if self._page is not None and self._tab_id is not None:
-            tabs.append(TabInfo(tab_id=self._tab_id, url=self._page.url, title=""))
+        tabs = [
+            TabInfo(tab_id=tab_id, url=page.url, current=tab_id == self._current_tab_id)
+            for tab_id, page in self._pages.items()
+            if not page.is_closed()
+        ]
         return SessionInfo(
             session_id=self._session_id,
             started=self._started,
             owns_browser=self._owns_browser,
             cdp_url=self._cdp_url,
             context_id=self._session_id if self._started else None,
+            current_tab_id=self._current_tab_id,
             tabs=tabs,
         )
+
+    async def list_tabs(self) -> list[TabInfo]:
+        infos: list[TabInfo] = []
+        for tab_id in list(self._pages):
+            if self._pages[tab_id].is_closed():
+                self._forget_page(tab_id)
+                continue
+            infos.append(await self._tab_info(tab_id))
+        return infos
+
+    async def new_tab(self, url: str | None = None, *, timeout_ms: float | None = None) -> TabInfo:
+        if self._context is None:
+            raise SessionNotStartedError("session is not started")
+        page = await self._context.new_page()
+        tab_id = self._register_page(page)
+        self._focus(tab_id)
+        await page.bring_to_front()
+        if url:
+            timeout = timeout_ms if timeout_ms is not None else self._config.timeout_ms
+            await page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+        return await self._tab_info(tab_id)
+
+    async def switch_tab(self, tab_id: str) -> TabInfo:
+        page = self._require_tab(tab_id)
+        self._focus(tab_id)
+        await page.bring_to_front()
+        return await self._tab_info(tab_id)
+
+    async def close_tab(self, tab_id: str | None = None) -> str:
+        target_id = tab_id or self._current_tab_id
+        if not target_id:
+            raise TabNotFoundError("")
+        page = self._require_tab(target_id)
+        open_tabs = [tid for tid, item in self._pages.items() if not item.is_closed()]
+        if len(open_tabs) <= 1:
+            raise LastTabError()
+        await page.close()
+        self._forget_page(target_id)
+        if self._page is not None and not self._page.is_closed():
+            await self._page.bring_to_front()
+        return target_id
+
+    def _on_new_page(self, page: Page) -> None:
+        self._register_page(page)
+
+    def _register_page(self, page: Page) -> str:
+        for tab_id, existing in self._pages.items():
+            if existing is page:
+                return tab_id
+        tab_id = uuid4().hex[:8]
+        self._pages[tab_id] = page
+        page.on("close", lambda _closed: self._forget_page(tab_id))
+        return tab_id
+
+    def _forget_page(self, tab_id: str) -> None:
+        self._pages.pop(tab_id, None)
+        if self._current_tab_id != tab_id:
+            return
+        remaining = next((tid for tid, item in self._pages.items() if not item.is_closed()), None)
+        if remaining is None:
+            self._current_tab_id = None
+            self._page = None
+            return
+        self._focus(remaining)
+
+    def _focus(self, tab_id: str) -> None:
+        self._current_tab_id = tab_id
+        self._page = self._pages[tab_id]
+
+    def _require_tab(self, tab_id: str) -> Page:
+        page = self._pages.get(tab_id)
+        if page is None or page.is_closed():
+            self._pages.pop(tab_id, None)
+            raise TabNotFoundError(tab_id)
+        return page
+
+    async def _tab_info(self, tab_id: str) -> TabInfo:
+        page = self._require_tab(tab_id)
+        title = ""
+        try:
+            title = await page.title()
+        except Exception:
+            logger.debug("page.title() failed tab=%s", tab_id, exc_info=True)
+        return TabInfo(tab_id=tab_id, url=page.url, title=title, current=tab_id == self._current_tab_id)
 
     async def _launch_unlocked(self) -> None:
         playwright = await async_playwright().start()
@@ -195,6 +291,7 @@ class BrowserSession:
                 },
             )
             context.set_default_timeout(timeout_ms)
+            context.on("page", self._on_new_page)
             page = await context.new_page()
         except Exception:
             await _close_quietly(context)
@@ -205,10 +302,10 @@ class BrowserSession:
                     logger.debug("browser.close() failed during connect", exc_info=True)
             raise
 
+        tab_id = self._register_page(page)
         self._browser = browser
         self._context = context
-        self._page = page
-        self._tab_id = uuid4().hex[:8]
+        self._focus(tab_id)
         self._cdp_url = cdp_url
         self._owns_browser = owns_browser
         self._started = True
@@ -241,6 +338,8 @@ class BrowserSession:
     async def _cleanup_unlocked(self) -> None:
         self._started = False
         page, self._page = self._page, None
+        self._pages.clear()
+        self._current_tab_id = None
         context, self._context = self._context, None
         browser, self._browser = self._browser, None
         playwright, self._playwright = self._playwright, None
@@ -248,7 +347,7 @@ class BrowserSession:
         profile_dir, self._profile_dir = self._profile_dir, None
         owns_browser = self._owns_browser
         self._owns_browser = False
-        self._tab_id = None
+        self._cdp_url = None
 
         await _close_quietly(page)
         await _close_quietly(context)

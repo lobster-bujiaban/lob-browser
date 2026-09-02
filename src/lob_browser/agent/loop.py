@@ -57,7 +57,6 @@ async def run_task(
     retry_attempt = 0
     retry_of_step: int | None = None
     pending_recovery: str | None = None
-    repeated_error_pages = 0
     trace = TraceWriter(trace_path) if trace_path else None
     if trace:
         trace.write(
@@ -73,12 +72,10 @@ async def run_task(
         if trace:
             trace.write("observation", step=step_no, observation=observation)
         tokens_used += observation.token_estimate
-        error_page = _is_browser_error_page(observation)
-        repeated_error_pages = repeated_error_pages + 1 if error_page else 0
-        if repeated_error_pages >= 3:
-            message = f"browser remained on error page: {observation.title or observation.url}"
+        if _is_browser_error_page(observation):
+            message = _browser_error_message(observation)
             steps.append(StepRecord(step=step_no, observation_id=observation.observation_id, url=observation.url, title=observation.title, error=message, token_estimate=observation.token_estimate))
-            return _finish(trace, approvals, checkpoint_store, checkpoint, AgentResult(ok=False, stop_reason=StopReason.REPEATED_FAILURE, message=message, steps=steps, tokens_used=tokens_used))
+            return _finish(trace, approvals, checkpoint_store, checkpoint, AgentResult(ok=False, stop_reason=StopReason.FAILED, message=message, steps=steps, tokens_used=tokens_used))
         if tokens_used > max_tokens:
             return _finish(trace, approvals, checkpoint_store, checkpoint, AgentResult(
                 ok=False,
@@ -389,3 +386,16 @@ def _is_browser_error_page(observation: Observation) -> bool:
     text = observation.text.lower()[:500]
     markers = ("502 bad gateway", "503 service unavailable", "504 gateway timeout", "err_", "无法访问此网站")
     return url.startswith("chrome-error://") or any(marker in title or marker in text for marker in markers)
+
+
+def _browser_error_message(observation: Observation) -> str:
+    content = f"{observation.title} {observation.text}".lower()
+    if "cert_common_name_invalid" in content or "隐私设置错误" in content:
+        return "目标网站 HTTPS 证书域名不匹配，已停止执行；请修复网站证书后重试"
+    if "502 bad gateway" in content:
+        return "目标网站返回 502 Bad Gateway，已停止执行"
+    if "503 service unavailable" in content:
+        return "目标网站返回 503 Service Unavailable，已停止执行"
+    if "504 gateway timeout" in content:
+        return "目标网站返回 504 Gateway Timeout，已停止执行"
+    return f"浏览器进入错误页面，已停止执行：{observation.title or observation.url}"

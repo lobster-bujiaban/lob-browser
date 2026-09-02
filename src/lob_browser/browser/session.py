@@ -42,6 +42,7 @@ _CHROMIUM_ARGS = (
     "--disable-sync",
     "--disable-default-apps",
     "--remote-allow-origins=*",
+    "--disable-features=HttpsUpgrades,HttpsFirstModeIncognito,HttpsFirstModeIncognitoNewSettings,HttpsFirstBalancedMode,HttpsFirstBalancedModeAutoEnable,HttpsFirstModeV2ForEngagedSites,HttpsFirstModeV2ForTypicallySecureUsers",
 )
 
 

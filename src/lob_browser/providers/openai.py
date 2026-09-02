@@ -60,6 +60,9 @@ class OpenAICompatibleDecider:
             match = re.search(r"https?://[^\s，。；;]+", task)
             if match:
                 return Decision(thought="open the target URL from the task", action=Action.navigate(match.group(0)))
+        extracted = _deterministic_extraction(task, observation)
+        if extracted is not None:
+            return extracted
         payload = {
             "model": self.model,
             "temperature": 0,
@@ -100,6 +103,17 @@ def _user_prompt(task: str, observation: Observation, history: list[StepRecord])
         f"Recent errors: {errors or 'none'}\n"
         f"Observation:\n{observation.summary(max_elements=60)}"
     )
+
+
+def _deterministic_extraction(task: str, observation: Observation) -> Decision | None:
+    intent = task.lower()
+    if not any(term in intent for term in ("所有网址", "所有链接", "全部网址", "全部链接", "all urls", "all links")):
+        return None
+    links = list(dict.fromkeys(item.href for item in observation.elements if item.href))
+    if not links:
+        return None
+    message = f"共采集到 {len(links)} 个网址：\n" + "\n".join(f"{index}. {url}" for index, url in enumerate(links, 1))
+    return Decision(thought="all requested links are available in the current observation", done=True, success=True, message=message)
 
 
 async def _post_json(url: str, payload: dict, api_key: str) -> dict:

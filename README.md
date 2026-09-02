@@ -98,6 +98,26 @@ Agent Loop 对 `stale_element` 和 `element_not_found` 使用重新观察后有�
 
 阶段 6～8 的入口：`TaskMemory` / `Planner` / `Executor` 提供有界任务记忆与规划协议；`EvaluationSuite` / `evaluate_suite` 提供任务集与成功率、步骤、Token、重试指标；browser-use 调用链映射见 [源码映射](./docs/BROWSER_USE_MAPPING.md)。
 
+## Web 前端
+
+项目附带一个浏览器 Agent 工作台原型，位于 `web/` 目录，参考同级 LOB 系列的“会话列表 + 对话区 + 执行流程”交互结构，增加了浏览器 Agent 的执行步骤、页面观察、审批确认和任务结果面板。
+
+当前前端使用内置演示状态模拟一次表单任务，后续可将 `web/app.js` 中的 `runDemo` 替换为后端的创建任务、WebSocket/SSE 事件流和审批接口。查看方式：
+
+```bash
+python3 -m http.server 8080 --directory web
+```
+
+打开 `http://127.0.0.1:8080` 即可体验。
+
+启动任务 API：
+
+```bash
+uv run uvicorn lob_browser.web.api:app --reload --port 8090
+```
+
+接口启动时会自动创建 `browser_tasks`、`task_steps`、`task_approvals` 和 `task_events` 表。
+
 ## 许可证
 
 本项目使用 [Apache License 2.0](./LICENSE) 开源。

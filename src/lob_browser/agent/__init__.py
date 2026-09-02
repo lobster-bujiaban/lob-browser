@@ -5,6 +5,7 @@ from lob_browser.agent.retry import RetryPolicy
 from lob_browser.agent.scripted import ScriptedDecider
 from lob_browser.approval import ApprovalPolicy, ApprovalStatus, RiskLevel, StaticApprovalHandler
 from lob_browser.runtime import CheckpointStore
+from lob_browser.agent.memory import Executor, Planner, TaskMemory
 
 __all__ = [
     "AgentResult",
@@ -20,4 +21,7 @@ __all__ = [
     "RiskLevel",
     "StaticApprovalHandler",
     "CheckpointStore",
+    "Executor",
+    "Planner",
+    "TaskMemory",
 ]

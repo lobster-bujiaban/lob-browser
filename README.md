@@ -38,10 +38,10 @@
 - [x] 阶段 2：页面感知与可交互元素抽取
 - [x] 阶段 3：模型驱动的 Browser Agent Loop
 - [x] 阶段 4：动态页面、标签页与复杂交互
-- [ ] 阶段 5：可靠执行、恢复与人工审批
-- [ ] 阶段 6：记忆、任务规划与多 Agent
-- [ ] 阶段 7：评测、可观测与生产化
-- [ ] 阶段 8：browser-use 源码映射与差异清单
+- [x] 阶段 5：可靠执行、恢复与人工审批
+- [x] 阶段 6：记忆、任务规划与多 Agent
+- [x] 阶段 7：评测、可观测与生产化
+- [x] 阶段 8：browser-use 源码映射与差异清单
 
 详细任务和验收标准见 [实施计划](./docs/IMPLEMENTATION_PLAN.md)。
 
@@ -95,6 +95,8 @@ Agent Loop 对 `stale_element` 和 `element_not_found` 使用重新观察后有�
 - Trace、Prompt 版本和系统化评测后续与 `lob-observe` 对接。
 - 不绕过验证码、反爬、安全警告或网站权限边界。
 - 不默认执行发布、删除、支付等有外部副作用的动作。
+
+阶段 6～8 的入口：`TaskMemory` / `Planner` / `Executor` 提供有界任务记忆与规划协议；`EvaluationSuite` / `evaluate_suite` 提供任务集与成功率、步骤、Token、重试指标；browser-use 调用链映射见 [源码映射](./docs/BROWSER_USE_MAPPING.md)。
 
 ## 许可证
 

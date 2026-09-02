@@ -31,8 +31,7 @@ function App() {
     }
     const saved = await response.json();
     setDetail(saved);
-    const restored = [{ role: "user", text: saved.prompt }];
-    if (saved.message) restored.push({ role: saved.status === "completed" ? "assistant" : "system", text: saved.message });
+    const restored = saved.messages?.length ? saved.messages.map((message) => ({ role: message.role, text: message.content })) : [{ role: "user", text: saved.prompt }];
     setMessages(restored);
   }
 
@@ -63,8 +62,9 @@ function App() {
       const saved = await response.json();
       setDetail(saved);
       setTasks((items) => items.map((item) => item.id === sessionId ? { ...item, status: saved.status } : item));
+      setCurrent((item) => item?.id === sessionId ? { ...item, status: saved.status } : item);
       if (["completed", "failed", "cancelled"].includes(saved.status)) {
-        setMessages((items) => [...items, { role: saved.status === "completed" ? "assistant" : "system", text: saved.message || saved.status }]);
+        setMessages(saved.messages?.map((message) => ({ role: message.role, text: message.content })) || []);
         setRunning(false);
         return;
       }
@@ -108,7 +108,7 @@ function App() {
     setDraft("");
     setRunning(true);
     try {
-      const endpoint = current?.status === "idle" ? `/api/tasks/${current.id}/run` : "/api/tasks";
+      const endpoint = current ? `/api/tasks/${current.id}/run` : "/api/tasks";
       const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: text, mode }) });
       if (!response.ok) throw new Error("任务服务不可用");
       const saved = await response.json();

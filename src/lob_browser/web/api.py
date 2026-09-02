@@ -15,7 +15,7 @@ from lob_browser.agent import run_task
 from lob_browser.agent.crawl import GenericCrawler
 from lob_browser.browser import BrowserSession, SessionConfig
 from lob_browser.providers.openai import OpenAICompatibleDecider, plan_crawl
-from .db import connect, create_empty_task, create_task, delete_task, delete_tasks, init, prepare_task, rename_task, save_collected_items, save_steps, set_task_status, task, tasks
+from .db import append_message, connect, conversation_prompt, create_empty_task, create_task, delete_task, delete_tasks, init, prepare_task, rename_task, save_collected_items, save_steps, set_task_status, task, tasks
 
 class CreateTask(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000)
@@ -71,6 +71,7 @@ async def new_empty_task(body: TaskTitle, request: Request):
 async def run_existing_task(task_id: UUID, body: CreateTask, request: Request):
     if not await prepare_task(request.app.state.db, task_id, body.prompt):
         raise HTTPException(404, "task not found")
+    await append_message(request.app.state.db, task_id, "user", body.prompt)
     asyncio.create_task(_execute_task(request.app.state.db, task_id, body.prompt, body.mode))
     return await task(request.app.state.db, task_id)
 
@@ -100,6 +101,7 @@ async def update_task_title(task_id: UUID, body: TaskTitle, request: Request):
     return await task(request.app.state.db, task_id)
 
 async def _execute_task(pool, task_id: UUID, prompt: str, mode: str = "auto") -> None:
+    prompt = await conversation_prompt(pool, task_id)
     plan = await plan_crawl(prompt) if mode in {"auto", "crawl"} else None
     if plan is None and not os.environ.get("OPENAI_API_KEY"):
         await set_task_status(pool, task_id, "failed", "模型未配置：请在 .env 设置 OPENAI_API_KEY、OPENAI_MODEL 和 OPENAI_BASE_URL")
@@ -116,9 +118,12 @@ async def _execute_task(pool, task_id: UUID, prompt: str, mode: str = "auto") ->
         rows = _step_rows(result.steps)
         await save_steps(pool, task_id, rows)
         await save_collected_items(pool, task_id, [item.model_dump() for item in result.collected_items])
+        await append_message(pool, task_id, "assistant" if result.ok else "system", result.message)
         await set_task_status(pool, task_id, "completed" if result.ok else "failed", result.message, result.model_dump(mode="json"))
     except Exception as exc:
-        await set_task_status(pool, task_id, "failed", f"执行失败：{type(exc).__name__}: {exc}")
+        message = f"执行失败：{type(exc).__name__}: {exc}"
+        await append_message(pool, task_id, "system", message)
+        await set_task_status(pool, task_id, "failed", message)
     finally:
         await session.close()
 

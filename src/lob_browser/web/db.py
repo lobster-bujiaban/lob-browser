@@ -41,6 +41,13 @@ CREATE TABLE IF NOT EXISTS task_events (
     id BIGSERIAL PRIMARY KEY, task_id UUID NOT NULL REFERENCES browser_tasks(id) ON DELETE CASCADE,
     event_type TEXT NOT NULL, payload JSONB NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS task_messages (
+    id BIGSERIAL PRIMARY KEY,
+    task_id UUID NOT NULL REFERENCES browser_tasks(id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK (role IN ('user','assistant','system')),
+    content TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS task_collected_items (
     id BIGSERIAL PRIMARY KEY,
     task_id UUID NOT NULL,
@@ -53,6 +60,7 @@ CREATE TABLE IF NOT EXISTS task_collected_items (
     UNIQUE(task_id, url)
 );
 CREATE INDEX IF NOT EXISTS task_events_task_id_id_idx ON task_events(task_id, id);
+CREATE INDEX IF NOT EXISTS task_messages_task_id_id_idx ON task_messages(task_id, id);
 CREATE INDEX IF NOT EXISTS task_collected_items_task_id_idx ON task_collected_items(task_id);
 ALTER TABLE task_collected_items DROP CONSTRAINT IF EXISTS task_collected_items_task_id_fkey;
 ALTER TABLE task_collected_items ALTER COLUMN task_id SET NOT NULL;
@@ -69,6 +77,7 @@ async def create_task(pool: asyncpg.Pool, task_id: UUID, prompt: str) -> None:
     async with pool.acquire() as conn:
         await conn.execute("INSERT INTO browser_tasks(id,title,prompt) VALUES($1,$2,$2)", task_id, prompt[:80])
         await conn.execute("INSERT INTO task_events(task_id,event_type,payload) VALUES($1,'task_created',$2::jsonb)", task_id, json.dumps({"prompt": prompt}, ensure_ascii=False))
+        await conn.execute("INSERT INTO task_messages(task_id,role,content) VALUES($1,'user',$2)", task_id, prompt)
 
 async def create_empty_task(pool: asyncpg.Pool, task_id: UUID, title: str) -> None:
     async with pool.acquire() as conn:
@@ -81,8 +90,24 @@ async def rename_task(pool: asyncpg.Pool, task_id: UUID, title: str) -> bool:
 
 async def prepare_task(pool: asyncpg.Pool, task_id: UUID, prompt: str) -> bool:
     async with pool.acquire() as conn:
-        result = await conn.execute("UPDATE browser_tasks SET prompt=$2,status='pending',message='',result=NULL WHERE id=$1", task_id, prompt)
-        return result == "UPDATE 1"
+        async with conn.transaction():
+            existing = await conn.fetchrow("SELECT prompt FROM browser_tasks WHERE id=$1", task_id)
+            if existing is None:
+                return False
+            count = await conn.fetchval("SELECT count(*) FROM task_messages WHERE task_id=$1", task_id)
+            if count == 0 and existing["prompt"]:
+                await conn.execute("INSERT INTO task_messages(task_id,role,content) VALUES($1,'user',$2)", task_id, existing["prompt"])
+            await conn.execute("UPDATE browser_tasks SET prompt=$2,status='pending',message='',result=NULL WHERE id=$1", task_id, prompt)
+            return True
+
+async def append_message(pool: asyncpg.Pool, task_id: UUID, role: str, content: str) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute("INSERT INTO task_messages(task_id,role,content) VALUES($1,$2,$3)", task_id, role, content)
+
+async def conversation_prompt(pool: asyncpg.Pool, task_id: UUID) -> str:
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT role,content FROM task_messages WHERE task_id=$1 ORDER BY id", task_id)
+    return "Task conversation:\n" + "\n".join(f"{row['role']}: {row['content']}" for row in rows)
 
 async def task(pool: asyncpg.Pool, task_id: UUID) -> dict | None:
     async with pool.acquire() as conn:
@@ -91,7 +116,8 @@ async def task(pool: asyncpg.Pool, task_id: UUID) -> dict | None:
         steps = await conn.fetch("SELECT * FROM task_steps WHERE task_id=$1 ORDER BY step_no", task_id)
         events = await conn.fetch("SELECT * FROM task_events WHERE task_id=$1 ORDER BY id", task_id)
         collected = await conn.fetch("SELECT * FROM task_collected_items WHERE task_id=$1 ORDER BY id", task_id)
-        return {**dict(row), "steps": [dict(x) for x in steps], "events": [dict(x) for x in events], "collected_items": [dict(x) for x in collected]}
+        messages = await conn.fetch("SELECT * FROM task_messages WHERE task_id=$1 ORDER BY id", task_id)
+        return {**dict(row), "steps": [dict(x) for x in steps], "events": [dict(x) for x in events], "collected_items": [dict(x) for x in collected], "messages": [dict(x) for x in messages]}
 
 async def tasks(pool: asyncpg.Pool, limit: int = 50) -> list[dict]:
     async with pool.acquire() as conn:

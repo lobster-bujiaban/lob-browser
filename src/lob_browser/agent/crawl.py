@@ -23,6 +23,8 @@ class CrawlPlan(BaseModel):
 
 
 class GenericCrawler:
+    continue_on_error_pages = True
+
     def __init__(self, plan: CrawlPlan) -> None:
         self.plan = plan
         self.root_host = urlparse(plan.start_url).hostname

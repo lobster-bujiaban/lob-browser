@@ -72,7 +72,7 @@ async def run_task(
         if trace:
             trace.write("observation", step=step_no, observation=observation)
         tokens_used += observation.token_estimate
-        if _is_browser_error_page(observation):
+        if _is_browser_error_page(observation) and not getattr(decider, "continue_on_error_pages", False):
             message = _browser_error_message(observation)
             steps.append(StepRecord(step=step_no, observation_id=observation.observation_id, url=observation.url, title=observation.title, error=message, token_estimate=observation.token_estimate))
             return _finish(trace, approvals, checkpoint_store, checkpoint, AgentResult(ok=False, stop_reason=StopReason.FAILED, message=message, steps=steps, tokens_used=tokens_used))

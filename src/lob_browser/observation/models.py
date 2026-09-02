@@ -28,9 +28,17 @@ class InteractiveElement(BaseModel):
     input_type: str | None = None
     value: str | None = None
     bbox: BoundingBox | None = None
+    frame_path: list[int] = Field(default_factory=list)
+    frame_url: str = ""
+    frame_version: int = 0
+    shadow_path: list[str] = Field(default_factory=list)
 
     def line(self) -> str:
         bits = [f"[{self.index}]", self.tag]
+        if self.frame_path:
+            bits.append(f"frame={'.'.join(map(str, self.frame_path))}")
+        if self.shadow_path:
+            bits.append(f"shadow={'/'.join(self.shadow_path)}")
         if self.role:
             bits.append(f"role={self.role}")
         if self.input_type:
@@ -52,6 +60,7 @@ class Observation(BaseModel):
     text: str
     elements: list[InteractiveElement] = Field(default_factory=list)
     token_estimate: int = 0
+    frames: list["FrameInfo"] = Field(default_factory=list)
 
     def element(self, index: int) -> InteractiveElement | None:
         for item in self.elements:
@@ -70,3 +79,9 @@ class Observation(BaseModel):
         lines = [f"url={self.url}", f"title={self.title}", f"elements={len(self.elements)}"]
         lines.extend(item.line() for item in self.elements[:max_elements])
         return "\n".join(lines)
+
+
+class FrameInfo(BaseModel):
+    path: list[int] = Field(default_factory=list)
+    url: str = ""
+    same_origin: bool = True

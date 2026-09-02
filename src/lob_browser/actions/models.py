@@ -205,3 +205,6 @@ class ActionResult(BaseModel):
     closed_tab_id: str | None = None
     dialogs: list[DialogInfo] = Field(default_factory=list)
     downloads: list[DownloadInfo] = Field(default_factory=list)
+    target_frame_path: list[int] = Field(default_factory=list)
+    target_frame_url: str | None = None
+    target_shadow_path: list[str] = Field(default_factory=list)

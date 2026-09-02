@@ -56,6 +56,28 @@ async def main() -> None:
                 "message": "alert accepted; confirm dismissed; prompt filled; unconfigured rejected",
             }
         )
+        iframe_results = await _verify_iframe(session, fixtures)
+        for result in iframe_results:
+            writer.write("action_result", task="iframe 动作验收", result=result)
+        summaries.append(
+            {
+                "task": "iframe 动作验收",
+                "ok": True,
+                "steps": len(iframe_results),
+                "message": "form submitted; popup handled; stale frame index rejected",
+            }
+        )
+        shadow_results = await _verify_shadow_dom(session, fixtures)
+        for result in shadow_results:
+            writer.write("action_result", task="Shadow DOM 动作验收", result=result)
+        summaries.append(
+            {
+                "task": "Shadow DOM 动作验收",
+                "ok": True,
+                "steps": len(shadow_results),
+                "message": "form submitted; popup handled; stale shadow index rejected",
+            }
+        )
         download_result = await _verify_download(session, fixtures)
         writer.write("action_result", task="下载处理验收", result=download_result)
         summaries.append(
@@ -132,6 +154,128 @@ async def _verify_download(session: BrowserSession, fixtures: Path):
     if download.size != source.stat().st_size or download.sha256 != expected_hash:
         raise SystemExit("download metadata mismatch")
     return result
+
+
+async def _verify_iframe(session: BrowserSession, fixtures: Path):
+    await session.page.goto((fixtures / "iframe.html").as_uri())
+    results = []
+    observation = await observe(session)
+    if not any(frame.path == [1] and not frame.same_origin for frame in observation.frames):
+        raise SystemExit("cross-origin iframe boundary was not recorded")
+    if observation.find_name("Cross Origin Button") is not None:
+        raise SystemExit("cross-origin iframe DOM must not be observed")
+    field = observation.find_name("iframe 姓名")
+    submit = observation.find_name("iframe 提交")
+    if field is None or submit is None or field.frame_path != [0] or submit.frame_path != [0]:
+        raise SystemExit("iframe elements were not observed with frame_path=[0]")
+    typed = await run_action(
+        session,
+        Action.type_text(index=field.index, text="小框", observation_id=observation.observation_id),
+    )
+    if not typed.ok:
+        raise SystemExit(f"iframe type failed: {typed.error}")
+    results.append(typed)
+
+    observation = await observe(session)
+    submit = observation.find_name("iframe 提交")
+    assert submit is not None
+    submitted = await run_action(
+        session,
+        Action.click(index=submit.index, observation_id=observation.observation_id),
+    )
+    if not submitted.ok:
+        raise SystemExit(f"iframe submit failed: {submitted.error}")
+    results.append(submitted)
+    if "iframe 提交成功" not in (await observe(session)).text:
+        raise SystemExit("iframe success text missing")
+
+    observation = await observe(session)
+    detail = observation.find_name("iframe 详情")
+    assert detail is not None
+    opened = await run_action(
+        session,
+        Action.click(index=detail.index, observation_id=observation.observation_id),
+    )
+    if not opened.ok or len(opened.opened_tabs) != 1:
+        raise SystemExit(f"iframe popup failed: {opened.error}")
+    results.append(opened)
+    original_id = opened.switched_from_tab_id
+    popup_id = opened.opened_tabs[0].tab_id
+    assert original_id is not None
+    results.append(await run_action(session, Action.switch_tab(original_id)))
+    results.append(await run_action(session, Action.close_tab(popup_id)))
+
+    old = await observe(session)
+    old_field = old.find_name("iframe 姓名")
+    assert old_field is not None
+    await session.page.locator("#demo").evaluate("el => { el.src = 'iframe-content.html?reload=1' }")
+    await session.page.frame_locator("#demo").locator("body").wait_for()
+    stale = await run_action(
+        session,
+        Action.click(index=old_field.index, observation_id=old.observation_id, timeout_ms=500),
+    )
+    if stale.error_kind is not ErrorKind.STALE_ELEMENT:
+        raise SystemExit(f"expected stale iframe index, got {stale.error_kind}")
+    results.append(stale)
+    return results
+
+
+async def _verify_shadow_dom(session: BrowserSession, fixtures: Path):
+    await session.page.goto((fixtures / "shadow.html").as_uri())
+    results = []
+    observation = await observe(session)
+    field = observation.find_name("Shadow 姓名")
+    if field is None or field.shadow_path != ["#shadow-task"]:
+        raise SystemExit("shadow element path was not observed")
+    typed = await run_action(
+        session,
+        Action.type_text(index=field.index, text="小影", observation_id=observation.observation_id),
+    )
+    if not typed.ok:
+        raise SystemExit(f"shadow type failed: {typed.error}")
+    results.append(typed)
+
+    observation = await observe(session)
+    submit = observation.find_name("Shadow 提交")
+    assert submit is not None
+    submitted = await run_action(
+        session,
+        Action.click(index=submit.index, observation_id=observation.observation_id),
+    )
+    if not submitted.ok or "Shadow 提交成功" not in (await observe(session)).text:
+        raise SystemExit(f"shadow submit failed: {submitted.error}")
+    results.append(submitted)
+
+    observation = await observe(session)
+    detail = observation.find_name("Shadow 详情")
+    assert detail is not None
+    opened = await run_action(
+        session,
+        Action.click(index=detail.index, observation_id=observation.observation_id),
+    )
+    if not opened.ok or len(opened.opened_tabs) != 1:
+        raise SystemExit(f"shadow popup failed: {opened.error}")
+    results.append(opened)
+    original_id = opened.switched_from_tab_id
+    popup_id = opened.opened_tabs[0].tab_id
+    assert original_id is not None
+    results.append(await run_action(session, Action.switch_tab(original_id)))
+    results.append(await run_action(session, Action.close_tab(popup_id)))
+
+    old = await observe(session)
+    old_field = old.find_name("Shadow 姓名")
+    assert old_field is not None
+    await session.page.evaluate(
+        "() => document.querySelector('#shadow-task').shadowRoot.querySelector('input').replaceWith(document.createElement('input'))"
+    )
+    stale = await run_action(
+        session,
+        Action.click(index=old_field.index, observation_id=old.observation_id, timeout_ms=500),
+    )
+    if stale.error_kind is not ErrorKind.STALE_ELEMENT:
+        raise SystemExit(f"expected stale shadow index, got {stale.error_kind}")
+    results.append(stale)
+    return results
 
 
 if __name__ == "__main__":

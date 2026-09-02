@@ -72,6 +72,10 @@ uv run python -m lob_browser.agent.local_smoke
 
 下载文件保存到 `artifacts/<session_id>/downloads/`，使用安全文件名和随机前缀避免路径穿越及覆盖；`ActionResult` 与 Trace 会记录来源 URL、建议文件名、保存路径、大小和 SHA-256。
 
+同源 iframe 会被逐 Frame 观察，元素携带 `frame_path`、Frame URL 和独立 DOM 版本；动作按路径进入目标 Frame，iframe 重载后旧索引会被拒绝。跨域 iframe 仅记录边界，不读取内部 DOM。
+
+open Shadow DOM 会递归观察，元素携带宿主 `shadow_path`；Playwright 定位器穿透开放 Shadow Root，内部 DOM 变化会推进版本并使旧索引失效。closed Shadow Root 保持不可读边界。
+
 ## 项目边界
 
 - `lob-browser` 关注网页任务执行，不重复实现 `lob-harness` 的通用 Agent 运行框架。

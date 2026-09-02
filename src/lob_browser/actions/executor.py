@@ -11,7 +11,7 @@ import logging
 import time
 
 from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import Page
+from playwright.async_api import Frame, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeout
 
 from lob_browser.actions.errors import DialogUnhandledError, DownloadError, ElementNotFoundError, PageClosedError, StaleElementError
@@ -37,6 +37,10 @@ async def run_action(session: BrowserSession, action: Action) -> ActionResult:
     before = await capture_snapshot(session)
     tabs_before = await session.list_tabs() if session.started else []
     current_before = session.current_tab_id
+    target_element = session.observation.element(action.index) if session.observation and action.index else None
+    target_frame_path = target_element.frame_path if target_element else []
+    target_frame_url = target_element.frame_url if target_element else None
+    target_shadow_path = target_element.shadow_path if target_element else []
     session.take_dialog_events()
     session.take_download_events()
     dialogs = []
@@ -71,6 +75,9 @@ async def run_action(session: BrowserSession, action: Action) -> ActionResult:
             closed_tab_id=action.tab_id or current_before if action.kind is ActionKind.CLOSE_TAB else None,
             dialogs=dialogs,
             downloads=downloads,
+            target_frame_path=target_frame_path,
+            target_frame_url=target_frame_url,
+            target_shadow_path=target_shadow_path,
         )
     except Exception as exc:
         dialogs = dialogs or session.take_dialog_events()
@@ -91,6 +98,9 @@ async def run_action(session: BrowserSession, action: Action) -> ActionResult:
             tabs_after=tabs_after,
             dialogs=dialogs,
             downloads=downloads,
+            target_frame_path=target_frame_path,
+            target_frame_url=target_frame_url,
+            target_shadow_path=target_shadow_path,
         )
 
 
@@ -216,19 +226,33 @@ async def _target(session: BrowserSession, page: Page, action: Action, timeout_m
         raise StaleElementError("observation_id mismatch")
     if _normalize_url(page.url) != _normalize_url(observation.url):
         raise StaleElementError("page changed since observation")
-    page_version = await page.evaluate("() => window.__lobPageVersion || 0")
-    if page_version != observation.page_version:
-        raise StaleElementError("DOM changed since observation")
-    if observation.element(action.index) is None:
+    element = observation.element(action.index)
+    if element is None:
         raise ElementNotFoundError(f"index={action.index}")
+    frame = _resolve_frame(page, element.frame_path)
+    if _normalize_url(frame.url) != _normalize_url(element.frame_url):
+        raise StaleElementError("frame changed since observation")
+    frame_version = await frame.evaluate("() => window.__lobPageVersion || 0")
+    if frame_version != element.frame_version:
+        raise StaleElementError("frame DOM changed since observation")
     selector = f'[data-lob-obs="{observation.observation_id}"][data-lob-i="{action.index}"]'
     try:
-        return await _attached(page, selector, timeout_ms)
-    except ElementNotFoundError as exc:
+        return await _attached(frame, selector, timeout_ms)
+    except (ElementNotFoundError, PlaywrightError) as exc:
         raise StaleElementError(f"index {action.index} is stale") from exc
 
 
-async def _attached(page: Page, selector: str | None, timeout_ms: float):
+def _resolve_frame(page: Page, frame_path: list[int]) -> Frame:
+    frame = page.main_frame
+    try:
+        for index in frame_path:
+            frame = frame.child_frames[index]
+    except IndexError as exc:
+        raise StaleElementError(f"frame path {frame_path} is stale") from exc
+    return frame
+
+
+async def _attached(page: Page | Frame, selector: str | None, timeout_ms: float):
     if not selector:
         raise ElementNotFoundError("<empty>")
     locator = page.locator(selector).filter(visible=True)

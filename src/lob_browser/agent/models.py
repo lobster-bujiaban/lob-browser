@@ -10,6 +10,7 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 
 from lob_browser.actions import Action, ActionResult
+from lob_browser.approval import ApprovalRecord, ApprovalStatus, RiskLevel
 
 
 class StopReason(StrEnum):
@@ -19,6 +20,9 @@ class StopReason(StrEnum):
     TOKEN_BUDGET = "token_budget"
     REPEATED_FAILURE = "repeated_failure"
     RETRY_EXHAUSTED = "retry_exhausted"
+    APPROVAL_REQUIRED = "approval_required"
+    APPROVAL_REJECTED = "approval_rejected"
+    CANCELLED = "cancelled"
 
 
 class Decision(BaseModel):
@@ -42,6 +46,10 @@ class StepRecord(BaseModel):
     retry_attempt: int = 0
     retry_of_step: int | None = None
     recovery_strategy: str | None = None
+    approval_request_id: str | None = None
+    approval_status: ApprovalStatus | None = None
+    risk_level: RiskLevel | None = None
+    approval_reason: str | None = None
 
 
 class AgentResult(BaseModel):
@@ -50,3 +58,4 @@ class AgentResult(BaseModel):
     message: str
     steps: list[StepRecord] = Field(default_factory=list)
     tokens_used: int = 0
+    approvals: list[ApprovalRecord] = Field(default_factory=list)

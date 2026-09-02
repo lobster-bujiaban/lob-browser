@@ -86,6 +86,8 @@ BrowserContext 可通过显式 `storage_state_path` 恢复登录态；保存状�
 
 Agent Loop 对 `stale_element` 和 `element_not_found` 使用重新观察后有限重试，对等待、滚动和导航类超时使用指数退避；可能已产生副作用的点击超时以及权限、安全错误不会自动重放。Step 与 Trace 记录重试次数、原始步骤、恢复策略和退避时间。
 
+发布、删除、支付、发送、授权和权限变更等高风险点击在执行前生成审批请求；无处理器时以 `approval_required` 暂停，拒绝或取消时不执行，只有批准后继续。审批请求、决定、风险原因和时间写入 Step、AgentResult 与 Trace 审计记录。
+
 ## 项目边界
 
 - `lob-browser` 关注网页任务执行，不重复实现 `lob-harness` 的通用 Agent 运行框架。

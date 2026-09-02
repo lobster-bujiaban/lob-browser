@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>人工审批任务</title></head>
+<body>
+  <h1>高风险操作</h1>
+  <button id="publish">发布文章</button>
+  <p id="status" role="status">尚未发布</p>
+  <script>
+    document.querySelector('#publish').addEventListener('click', () => {
+      document.querySelector('#status').textContent = '文章已发布';
+    });
+  </script>
+</body>
+</html>

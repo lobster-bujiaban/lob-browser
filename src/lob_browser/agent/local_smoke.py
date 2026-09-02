@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 from lob_browser.actions import Action, ErrorKind, run_action
-from lob_browser.agent import Decision, LocalScriptedDecider, RetryPolicy, StopReason, run_task
+from lob_browser.agent import ApprovalStatus, Decision, LocalScriptedDecider, RetryPolicy, StaticApprovalHandler, StopReason, run_task
 from lob_browser.agent.retry import recovery_strategy
 from lob_browser.agent.trace import TraceWriter
 from lob_browser.browser import BrowserSession, SessionConfig
@@ -157,6 +157,16 @@ async def main() -> None:
                 "steps": len(exhausted.steps),
                 "message": exhausted.message,
             }
+        )
+        approval_results = await _verify_approval_boundary(session, fixtures, trace)
+        summaries.extend(
+            {
+                "task": name,
+                "ok": ok,
+                "steps": len(result.steps),
+                "message": result.message,
+            }
+            for name, ok, result in approval_results
         )
         print(json.dumps(summaries, ensure_ascii=False, indent=2))
         print(f"trace={trace}")
@@ -577,6 +587,44 @@ async def _verify_retry_recovery(session: BrowserSession, fixtures: Path, trace:
     if exhausted.stop_reason is not StopReason.RETRY_EXHAUSTED or len(exhausted.steps) != 2:
         raise SystemExit(f"retry limit was not enforced: {exhausted.stop_reason}")
     return result, exhausted
+
+
+async def _verify_approval_boundary(session: BrowserSession, fixtures: Path, trace: Path):
+    async def decider(task, observation, history):
+        if "文章已发布" in observation.text:
+            return Decision(done=True, success=True, message="approved publish completed")
+        target = observation.find_name("发布文章")
+        assert target is not None
+        return Decision(
+            action=Action.click(index=target.index, observation_id=observation.observation_id),
+            thought="publish article",
+        )
+
+    cases = (
+        ("审批暂停验收", None, StopReason.APPROVAL_REQUIRED),
+        ("审批拒绝验收", StaticApprovalHandler(ApprovalStatus.REJECTED), StopReason.APPROVAL_REJECTED),
+        ("审批取消验收", StaticApprovalHandler(ApprovalStatus.CANCELLED), StopReason.CANCELLED),
+        ("审批批准验收", StaticApprovalHandler(ApprovalStatus.APPROVED), StopReason.DONE),
+    )
+    results = []
+    for name, handler, expected_stop in cases:
+        await session.page.goto((fixtures / "approval.html").as_uri())
+        result = await run_task(
+            session,
+            "发布文章",
+            decider,
+            max_steps=4,
+            approval_handler=handler,
+            trace_path=trace,
+        )
+        if result.stop_reason is not expected_stop or len(result.approvals) != 1:
+            raise SystemExit(f"approval case failed: {name}: {result.stop_reason}")
+        published = "文章已发布" in (await observe(session)).text
+        should_publish = expected_stop is StopReason.DONE
+        if published is not should_publish:
+            raise SystemExit(f"approval execution boundary failed: {name}")
+        results.append((name, True, result))
+    return results
 
 
 async def _serve_fixture(

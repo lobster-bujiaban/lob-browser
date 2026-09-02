@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import asyncio
+import os
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI, HTTPException, Request
@@ -8,10 +10,16 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .db import connect, create_task, init, task
+from lob_browser.agent import run_task
+from lob_browser.browser import BrowserSession, SessionConfig
+from lob_browser.providers.openai import OpenAICompatibleDecider
+from .db import connect, create_empty_task, create_task, delete_task, delete_tasks, init, prepare_task, rename_task, save_steps, set_task_status, task, tasks
 
 class CreateTask(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000)
+
+class TaskTitle(BaseModel):
+    title: str = Field(min_length=1, max_length=80)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -47,10 +55,60 @@ async def health(request: Request):
 async def new_task(body: CreateTask, request: Request):
     task_id = uuid4()
     await create_task(request.app.state.db, task_id, body.prompt)
+    asyncio.create_task(_execute_task(request.app.state.db, task_id, body.prompt))
     return await task(request.app.state.db, task_id)
+
+@app.post("/api/tasks/empty", status_code=201)
+async def new_empty_task(body: TaskTitle, request: Request):
+    task_id = uuid4()
+    await create_empty_task(request.app.state.db, task_id, body.title.strip())
+    return await task(request.app.state.db, task_id)
+
+@app.post("/api/tasks/{task_id}/run")
+async def run_existing_task(task_id: UUID, body: CreateTask, request: Request):
+    if not await prepare_task(request.app.state.db, task_id, body.prompt):
+        raise HTTPException(404, "task not found")
+    asyncio.create_task(_execute_task(request.app.state.db, task_id, body.prompt))
+    return await task(request.app.state.db, task_id)
+
+@app.get("/api/tasks")
+async def list_tasks(request: Request):
+    return await tasks(request.app.state.db)
+
+@app.delete("/api/tasks")
+async def clear_tasks(request: Request):
+    return {"deleted": await delete_tasks(request.app.state.db)}
 
 @app.get("/api/tasks/{task_id}")
 async def get_task(task_id: UUID, request: Request):
     value = await task(request.app.state.db, task_id)
     if value is None: raise HTTPException(404, "task not found")
     return value
+
+@app.delete("/api/tasks/{task_id}", status_code=204)
+async def remove_task(task_id: UUID, request: Request):
+    if not await delete_task(request.app.state.db, task_id):
+        raise HTTPException(404, "task not found")
+
+@app.patch("/api/tasks/{task_id}")
+async def update_task_title(task_id: UUID, body: TaskTitle, request: Request):
+    if not await rename_task(request.app.state.db, task_id, body.title.strip()):
+        raise HTTPException(404, "task not found")
+    return await task(request.app.state.db, task_id)
+
+async def _execute_task(pool, task_id: UUID, prompt: str) -> None:
+    if not os.environ.get("OPENAI_API_KEY"):
+        await set_task_status(pool, task_id, "failed", "模型未配置：请在 .env 设置 OPENAI_API_KEY、OPENAI_MODEL 和 OPENAI_BASE_URL")
+        return
+    await set_task_status(pool, task_id, "running", "Agent 正在启动浏览器")
+    session = BrowserSession(SessionConfig(headless=True))
+    try:
+        await session.start()
+        result = await run_task(session, prompt, OpenAICompatibleDecider(), max_steps=12, trace_path=f"artifacts/{task_id}.jsonl")
+        rows = [{"step_no": step.step, "status": "done" if step.result and step.result.ok else "failed" if step.error else "done", "label": step.action.kind.value if step.action else "完成判断", "detail": step.error or (step.result.message if step.result else step.thought), "payload": step.model_dump(mode="json")} for step in result.steps]
+        await save_steps(pool, task_id, rows)
+        await set_task_status(pool, task_id, "completed" if result.ok else "failed", result.message, result.model_dump(mode="json"))
+    except Exception as exc:
+        await set_task_status(pool, task_id, "failed", f"执行失败：{type(exc).__name__}: {exc}")
+    finally:
+        await session.close()

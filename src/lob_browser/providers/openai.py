@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 
@@ -16,8 +17,10 @@ from lob_browser.actions import Action, ActionKind
 from lob_browser.agent.models import Decision, StepRecord
 from lob_browser.observation import Observation
 
-_SYSTEM = """You are a browser agent. Pick one structured action per turn from the observation.
-Use element indexes from the current observation only. Set done=true when the task is complete.
+_SYSTEM = """You are a browser agent. Return exactly one JSON object per turn.
+For an action use: {"thought":"...","done":false,"success":false,"kind":"navigate|click|type|select|scroll|wait|back|reload|new_tab|switch_tab|close_tab|dialog|upload","url":null,"index":null,"text":null,"value":null}.
+For completion use: {"thought":"...","done":true,"success":true,"message":"result"}.
+Use element indexes from the current observation only. Never omit kind when done=false.
 Never include passwords or other secret field values in thought or message."""
 
 
@@ -35,6 +38,7 @@ class ModelAction(BaseModel):
     tab_id: str | None = None
     direction: str | None = None
     amount: int | None = None
+    action: "ModelAction | None" = None
 
 
 class OpenAICompatibleDecider:
@@ -52,6 +56,10 @@ class OpenAICompatibleDecider:
     async def __call__(self, task: str, observation: Observation, history: list[StepRecord]) -> Decision:
         if not self.api_key:
             raise RuntimeError("OPENAI_API_KEY is not set")
+        if observation.url == "about:blank":
+            match = re.search(r"https?://[^\s，。；;]+", task)
+            if match:
+                return Decision(thought="open the target URL from the task", action=Action.navigate(match.group(0)))
         payload = {
             "model": self.model,
             "temperature": 0,
@@ -64,19 +72,21 @@ class OpenAICompatibleDecider:
         data = await _post_json(f"{self.base_url}/chat/completions", payload, self.api_key)
         content = data["choices"][0]["message"]["content"]
         parsed = ModelAction.model_validate(json.loads(content))
+        action_data = parsed.action or parsed
         if parsed.done:
             return Decision(thought=parsed.thought, done=True, success=parsed.success, message=parsed.message)
-        if parsed.kind is None:
-            return Decision(thought=parsed.thought, done=True, success=False, message="model returned no action")
+        if action_data.kind is None:
+            compact = content.replace("\n", " ")[:300]
+            return Decision(thought=parsed.thought, done=True, success=False, message=f"model returned no action: {compact}")
         action = Action(
-            kind=parsed.kind,
-            url=parsed.url,
-            index=parsed.index,
-            selector=parsed.selector,
-            text=parsed.text,
-            value=parsed.value,
-            tab_id=parsed.tab_id,
-            amount=parsed.amount,
+            kind=action_data.kind,
+            url=action_data.url,
+            index=action_data.index,
+            selector=action_data.selector,
+            text=action_data.text,
+            value=action_data.value,
+            tab_id=action_data.tab_id,
+            amount=action_data.amount,
             observation_id=observation.observation_id,
         )
         return Decision(thought=parsed.thought, action=action)

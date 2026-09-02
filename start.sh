@@ -68,4 +68,8 @@ echo "[LOB] 启动 React: http://127.0.0.1:$WEB_PORT"
 WEB_PID=$!
 
 echo "[LOB] 前端与 API 已启动，按 Ctrl+C 停止"
-wait -n "$API_PID" "$WEB_PID"
+while kill -0 "$API_PID" 2>/dev/null && kill -0 "$WEB_PID" 2>/dev/null; do
+  sleep 1
+done
+
+echo "[LOB] 检测到服务退出，正在停止其余进程..."

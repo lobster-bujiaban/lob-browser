@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .db import connect, create_task, init, task
@@ -22,6 +23,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="LOB Browser API", version="0.1.0", lifespan=lifespan)
 
 WEB_DIR = __import__("pathlib").Path(__file__).resolve().parents[3] / "web"
+app.mount("/src", StaticFiles(directory=WEB_DIR / "src"), name="web-src")
 
 @app.get("/", include_in_schema=False)
 async def web_home():

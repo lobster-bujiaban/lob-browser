@@ -14,8 +14,10 @@ Deliberate simplifications:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
+import re
 import shutil
 import socket
 import tempfile
@@ -25,10 +27,10 @@ from pathlib import Path
 from typing import Self
 from uuid import uuid4
 
-from playwright.async_api import Browser, BrowserContext, Dialog, Page, Playwright, async_playwright
+from playwright.async_api import Browser, BrowserContext, Dialog, Download, Page, Playwright, async_playwright
 
 from lob_browser.browser.errors import LastTabError, SessionError, SessionNotStartedError, TabNotFoundError
-from lob_browser.browser.models import DialogInfo, SessionConfig, SessionInfo, TabInfo
+from lob_browser.browser.models import DialogInfo, DownloadInfo, SessionConfig, SessionInfo, TabInfo
 
 logger = logging.getLogger("lob_browser.browser")
 
@@ -64,6 +66,8 @@ class BrowserSession:
         self._observation = None
         self._dialog_policy: tuple[bool, str | None] | None = None
         self._dialog_events: list[DialogInfo] = []
+        self._download_events: list[DownloadInfo] = []
+        self._pending_downloads: asyncio.Queue[Download] = asyncio.Queue()
 
     @property
     def observation(self):
@@ -79,6 +83,20 @@ class BrowserSession:
         events = self._dialog_events
         self._dialog_events = []
         return events
+
+    def take_download_events(self) -> list[DownloadInfo]:
+        events = self._download_events
+        self._download_events = []
+        while not self._pending_downloads.empty():
+            self._pending_downloads.get_nowait()
+        return events
+
+    async def wait_for_download(self, *, timeout_ms: float) -> None:
+        try:
+            download = await asyncio.wait_for(self._pending_downloads.get(), timeout=timeout_ms / 1000)
+        except TimeoutError:
+            return
+        await self._save_download(download)
 
     @property
     def session_id(self) -> str:
@@ -246,7 +264,11 @@ class BrowserSession:
         self._pages[tab_id] = page
         page.on("close", lambda _closed: self._forget_page(tab_id))
         page.on("dialog", self._on_dialog)
+        page.on("download", self._schedule_download)
         return tab_id
+
+    def _schedule_download(self, download: Download) -> None:
+        self._pending_downloads.put_nowait(download)
 
     async def _on_dialog(self, dialog: Dialog) -> None:
         policy = self._dialog_policy
@@ -267,6 +289,23 @@ class BrowserSession:
             await dialog.accept(prompt_text)
         else:
             await dialog.dismiss()
+
+    async def _save_download(self, download: Download) -> None:
+        suggested = Path(download.suggested_filename).name or "download"
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", suggested).strip("._") or "download"
+        download_dir = self._config.artifact_dir.resolve() / self._session_id / "downloads"
+        download_dir.mkdir(parents=True, exist_ok=True)
+        target = download_dir / f"{uuid4().hex[:8]}-{safe_name}"
+        info = DownloadInfo(url=download.url, suggested_filename=suggested)
+        try:
+            await download.save_as(target)
+            info.saved_path = str(target)
+            info.size = target.stat().st_size
+            info.sha256 = await asyncio.to_thread(_sha256, target)
+        except Exception as exc:
+            failure = await download.failure()
+            info.failure = failure or f"{type(exc).__name__}: {exc}"
+        self._download_events.append(info)
 
     def _forget_page(self, tab_id: str) -> None:
         self._pages.pop(tab_id, None)
@@ -412,6 +451,9 @@ class BrowserSession:
         self._observation = None
         self._dialog_policy = None
         self._dialog_events = []
+        self._download_events = []
+        while not self._pending_downloads.empty():
+            self._pending_downloads.get_nowait()
 
         await _close_quietly(page)
         await _close_quietly(context)
@@ -450,6 +492,14 @@ def _free_tcp_port() -> int:
 def _read_json(url: str) -> dict[str, object]:
     with urllib.request.urlopen(url, timeout=0.5) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(64 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 async def _close_quietly(closable: Page | BrowserContext | None) -> None:

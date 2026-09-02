@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 
@@ -21,7 +22,7 @@ async def main() -> None:
     trace = root / "artifacts" / "local-smoke.jsonl"
     trace.unlink(missing_ok=True)
     decider = LocalScriptedDecider(fixtures)
-    session = BrowserSession(SessionConfig(headless=True))
+    session = BrowserSession(SessionConfig(headless=True, artifact_dir=root / "artifacts"))
     summaries = []
     try:
         await session.start()
@@ -53,6 +54,16 @@ async def main() -> None:
                 "ok": True,
                 "steps": len(dialog_results),
                 "message": "alert accepted; confirm dismissed; prompt filled; unconfigured rejected",
+            }
+        )
+        download_result = await _verify_download(session, fixtures)
+        writer.write("action_result", task="下载处理验收", result=download_result)
+        summaries.append(
+            {
+                "task": "下载处理验收",
+                "ok": True,
+                "steps": 1,
+                "message": "download saved with size and sha256",
             }
         )
         print(json.dumps(summaries, ensure_ascii=False, indent=2))
@@ -98,6 +109,29 @@ async def _verify_dialogs(session: BrowserSession, fixtures: Path):
         raise SystemExit("unconfigured dialog was not dismissed")
     results.append(unconfigured)
     return results
+
+
+async def _verify_download(session: BrowserSession, fixtures: Path):
+    await session.page.goto((fixtures / "download.html").as_uri())
+    observation = await observe(session)
+    target = observation.find_name("下载报告")
+    assert target is not None
+    result = await run_action(
+        session,
+        Action.click(index=target.index, observation_id=observation.observation_id),
+    )
+    if not result.ok or len(result.downloads) != 1:
+        raise SystemExit(f"download failed: {result.error}")
+    download = result.downloads[0]
+    source = fixtures / "files" / "lob-report.txt"
+    expected_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+    saved = Path(download.saved_path or "")
+    expected_dir = (session.config.artifact_dir / session.session_id / "downloads").resolve()
+    if saved.parent != expected_dir or not saved.is_file():
+        raise SystemExit(f"download escaped artifact directory: {saved}")
+    if download.size != source.stat().st_size or download.sha256 != expected_hash:
+        raise SystemExit("download metadata mismatch")
+    return result
 
 
 if __name__ == "__main__":

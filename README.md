@@ -70,6 +70,8 @@ uv run python -m lob_browser.agent.local_smoke
 
 弹窗处理通过 `Action.dialog(accept=..., prompt_text=...)` 配置下一次 alert、confirm 或 prompt；未配置策略的弹窗会被安全拒绝，并返回 `dialog_unhandled`，所有弹窗内容和处理结果都会进入 `ActionResult` 与 Trace。
 
+下载文件保存到 `artifacts/<session_id>/downloads/`，使用安全文件名和随机前缀避免路径穿越及覆盖；`ActionResult` 与 Trace 会记录来源 URL、建议文件名、保存路径、大小和 SHA-256。
+
 ## 项目边界
 
 - `lob-browser` 关注网页任务执行，不重复实现 `lob-harness` 的通用 Agent 运行框架。

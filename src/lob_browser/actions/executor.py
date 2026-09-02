@@ -14,7 +14,7 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
 from playwright.async_api import TimeoutError as PlaywrightTimeout
 
-from lob_browser.actions.errors import DialogUnhandledError, ElementNotFoundError, PageClosedError, StaleElementError
+from lob_browser.actions.errors import DialogUnhandledError, DownloadError, ElementNotFoundError, PageClosedError, StaleElementError
 from lob_browser.actions.models import Action, ActionKind, ActionResult, ErrorKind, PageSnapshot
 from lob_browser.browser import BrowserSession, SessionNotStartedError
 from lob_browser.browser.errors import TabError
@@ -38,14 +38,19 @@ async def run_action(session: BrowserSession, action: Action) -> ActionResult:
     tabs_before = await session.list_tabs() if session.started else []
     current_before = session.current_tab_id
     session.take_dialog_events()
+    session.take_download_events()
     dialogs = []
+    downloads = []
     try:
         timeout_ms = action.timeout_ms if action.timeout_ms is not None else session.config.timeout_ms
         async with asyncio.timeout(timeout_ms / 1000 + 0.5):
             message = await _dispatch(session, action, timeout_ms)
         dialogs = session.take_dialog_events()
+        downloads = session.take_download_events()
         if any(not dialog.configured for dialog in dialogs):
             raise DialogUnhandledError("dialog appeared without a configured policy and was dismissed")
+        if any(download.failure for download in downloads):
+            raise DownloadError("download failed: " + "; ".join(item.failure or "unknown" for item in downloads))
         after = await capture_snapshot(session)
         tabs_after = await session.list_tabs()
         before_ids = {tab.tab_id for tab in tabs_before}
@@ -65,9 +70,11 @@ async def run_action(session: BrowserSession, action: Action) -> ActionResult:
             switched_to_tab_id=current_after if current_before != current_after else None,
             closed_tab_id=action.tab_id or current_before if action.kind is ActionKind.CLOSE_TAB else None,
             dialogs=dialogs,
+            downloads=downloads,
         )
     except Exception as exc:
         dialogs = dialogs or session.take_dialog_events()
+        downloads = downloads or session.take_download_events()
         kind, error = classify_error(exc)
         after = await capture_snapshot(session)
         tabs_after = await session.list_tabs() if session.started else []
@@ -83,6 +90,7 @@ async def run_action(session: BrowserSession, action: Action) -> ActionResult:
             tabs_before=tabs_before,
             tabs_after=tabs_after,
             dialogs=dialogs,
+            downloads=downloads,
         )
 
 
@@ -116,6 +124,8 @@ def classify_error(exc: BaseException) -> tuple[ErrorKind, str]:
         return ErrorKind.STALE_ELEMENT, str(exc)
     if isinstance(exc, DialogUnhandledError):
         return ErrorKind.DIALOG_UNHANDLED, str(exc)
+    if isinstance(exc, DownloadError):
+        return ErrorKind.DOWNLOAD_FAILED, str(exc)
     if isinstance(exc, ElementNotFoundError):
         return ErrorKind.ELEMENT_NOT_FOUND, str(exc)
     if isinstance(exc, TabError):
@@ -157,7 +167,11 @@ async def _dispatch(session: BrowserSession, action: Action, timeout_ms: float) 
             return "reloaded"
         case ActionKind.CLICK:
             previous_tab_ids = session.tab_ids()
-            await (await _target(session, page, action, timeout_ms)).click(timeout=timeout_ms)
+            locator = await _target(session, page, action, timeout_ms)
+            expects_download = await locator.get_attribute("download") is not None
+            await locator.click(timeout=timeout_ms)
+            download_wait_ms = timeout_ms if expects_download else min(timeout_ms, 250)
+            await session.wait_for_download(timeout_ms=download_wait_ms)
             opened = await session.focus_new_tab(previous_tab_ids, timeout_ms=timeout_ms)
             if opened:
                 return f"clicked {action.selector or action.index}; opened and switched to tab {opened.tab_id}"

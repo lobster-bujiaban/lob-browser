@@ -27,3 +27,7 @@ class StaleElementError(ActionError):
 
 class DialogUnhandledError(ActionError):
     """A dialog appeared without a configured handling policy."""
+
+
+class DownloadError(ActionError):
+    """A browser download failed."""

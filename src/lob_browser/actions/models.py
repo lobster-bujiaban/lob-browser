@@ -11,7 +11,7 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, Field, model_validator
 
-from lob_browser.browser.models import DialogInfo, TabInfo
+from lob_browser.browser.models import DialogInfo, DownloadInfo, TabInfo
 
 
 class ActionKind(StrEnum):
@@ -37,6 +37,7 @@ class ErrorKind(StrEnum):
     TAB_NOT_FOUND = "tab_not_found"
     STALE_ELEMENT = "stale_element"
     DIALOG_UNHANDLED = "dialog_unhandled"
+    DOWNLOAD_FAILED = "download_failed"
     UNKNOWN = "unknown"
 
 
@@ -203,3 +204,4 @@ class ActionResult(BaseModel):
     switched_to_tab_id: str | None = None
     closed_tab_id: str | None = None
     dialogs: list[DialogInfo] = Field(default_factory=list)
+    downloads: list[DownloadInfo] = Field(default_factory=list)

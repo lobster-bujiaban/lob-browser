@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic import BaseModel, Field
 
 
@@ -13,6 +15,7 @@ class SessionConfig(BaseModel):
     timeout_ms: float = 30_000
     viewport_width: int = 1280
     viewport_height: int = 720
+    artifact_dir: Path = Path("artifacts")
 
 
 class TabInfo(BaseModel):
@@ -29,6 +32,15 @@ class DialogInfo(BaseModel):
     accepted: bool
     prompt_text: str | None = None
     configured: bool = False
+
+
+class DownloadInfo(BaseModel):
+    url: str
+    suggested_filename: str
+    saved_path: str | None = None
+    size: int | None = None
+    sha256: str | None = None
+    failure: str | None = None
 
 
 class SessionInfo(BaseModel):

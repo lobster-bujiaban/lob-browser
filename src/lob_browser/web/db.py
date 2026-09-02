@@ -41,7 +41,21 @@ CREATE TABLE IF NOT EXISTS task_events (
     id BIGSERIAL PRIMARY KEY, task_id UUID NOT NULL REFERENCES browser_tasks(id) ON DELETE CASCADE,
     event_type TEXT NOT NULL, payload JSONB NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS task_collected_items (
+    id BIGSERIAL PRIMARY KEY,
+    task_id UUID NOT NULL,
+    url TEXT NOT NULL,
+    title TEXT,
+    content TEXT,
+    published_at TEXT,
+    author TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(task_id, url)
+);
 CREATE INDEX IF NOT EXISTS task_events_task_id_id_idx ON task_events(task_id, id);
+CREATE INDEX IF NOT EXISTS task_collected_items_task_id_idx ON task_collected_items(task_id);
+ALTER TABLE task_collected_items DROP CONSTRAINT IF EXISTS task_collected_items_task_id_fkey;
+ALTER TABLE task_collected_items ALTER COLUMN task_id SET NOT NULL;
 """
 
 async def connect() -> asyncpg.Pool:
@@ -76,7 +90,8 @@ async def task(pool: asyncpg.Pool, task_id: UUID) -> dict | None:
         if not row: return None
         steps = await conn.fetch("SELECT * FROM task_steps WHERE task_id=$1 ORDER BY step_no", task_id)
         events = await conn.fetch("SELECT * FROM task_events WHERE task_id=$1 ORDER BY id", task_id)
-        return {**dict(row), "steps": [dict(x) for x in steps], "events": [dict(x) for x in events]}
+        collected = await conn.fetch("SELECT * FROM task_collected_items WHERE task_id=$1 ORDER BY id", task_id)
+        return {**dict(row), "steps": [dict(x) for x in steps], "events": [dict(x) for x in events], "collected_items": [dict(x) for x in collected]}
 
 async def tasks(pool: asyncpg.Pool, limit: int = 50) -> list[dict]:
     async with pool.acquire() as conn:
@@ -111,4 +126,16 @@ async def save_steps(pool: asyncpg.Pool, task_id: UUID, steps: list[dict]) -> No
                 await conn.execute(
                     "INSERT INTO task_steps(task_id,step_no,status,label,detail,payload) VALUES($1,$2,$3,$4,$5,$6::jsonb)",
                     task_id, item["step_no"], item["status"], item["label"], item["detail"], json.dumps(item["payload"], ensure_ascii=False),
+                )
+
+async def save_collected_items(pool: asyncpg.Pool, task_id: UUID, items: list[dict]) -> None:
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("DELETE FROM task_collected_items WHERE task_id=$1", task_id)
+            for item in items:
+                if not item.get("url"):
+                    continue
+                await conn.execute(
+                    "INSERT INTO task_collected_items(task_id,url,title,content,published_at,author) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(task_id,url) DO UPDATE SET title=EXCLUDED.title,content=EXCLUDED.content,published_at=EXCLUDED.published_at,author=EXCLUDED.author",
+                    task_id, item["url"], item.get("title"), item.get("content"), item.get("published_at"), item.get("author"),
                 )

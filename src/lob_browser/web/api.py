@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from lob_browser.agent import run_task
 from lob_browser.browser import BrowserSession, SessionConfig
 from lob_browser.providers.openai import OpenAICompatibleDecider
-from .db import connect, create_empty_task, create_task, delete_task, delete_tasks, init, prepare_task, rename_task, save_steps, set_task_status, task, tasks
+from .db import connect, create_empty_task, create_task, delete_task, delete_tasks, init, prepare_task, rename_task, save_collected_items, save_steps, set_task_status, task, tasks
 
 class CreateTask(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000)
@@ -109,6 +109,7 @@ async def _execute_task(pool, task_id: UUID, prompt: str) -> None:
         result = await run_task(session, prompt, OpenAICompatibleDecider(), max_steps=12, trace_path=f"artifacts/{task_id}.jsonl", on_steps=persist_steps)
         rows = _step_rows(result.steps)
         await save_steps(pool, task_id, rows)
+        await save_collected_items(pool, task_id, [item.model_dump() for item in result.collected_items])
         await set_task_status(pool, task_id, "completed" if result.ok else "failed", result.message, result.model_dump(mode="json"))
     except Exception as exc:
         await set_task_status(pool, task_id, "failed", f"执行失败：{type(exc).__name__}: {exc}")

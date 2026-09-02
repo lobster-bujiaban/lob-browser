@@ -33,6 +33,15 @@ class Decision(BaseModel):
     success: bool = False
     message: str = ""
     action: Action | None = None
+    collected_items: list["CollectedItem"] = Field(default_factory=list)
+
+
+class CollectedItem(BaseModel):
+    url: str
+    title: str | None = None
+    content: str | None = None
+    published_at: str | None = None
+    author: str | None = None
 
 
 class StepRecord(BaseModel):
@@ -63,3 +72,4 @@ class AgentResult(BaseModel):
     approvals: list[ApprovalRecord] = Field(default_factory=list)
     run_id: str | None = None
     checkpoint_path: str | None = None
+    collected_items: list[CollectedItem] = Field(default_factory=list)

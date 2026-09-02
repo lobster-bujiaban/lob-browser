@@ -133,6 +133,7 @@ async def run_task(
                 message=decision.message or decision.thought,
                 steps=steps,
                 tokens_used=tokens_used,
+                collected_items=decision.collected_items,
             ))
 
         action = decision.action

@@ -14,7 +14,7 @@ import urllib.request
 from pydantic import BaseModel
 
 from lob_browser.actions import Action, ActionKind
-from lob_browser.agent.models import Decision, StepRecord
+from lob_browser.agent.models import CollectedItem, Decision, StepRecord
 from lob_browser.observation import Observation
 
 _SYSTEM = """You are a browser agent. Return exactly one JSON object per turn.
@@ -52,6 +52,8 @@ class OpenAICompatibleDecider:
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
         self.model = model or os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
         self.base_url = (base_url or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")).rstrip("/")
+        self._collected_links: dict[str, CollectedItem] = {}
+        self._pending_sections: list[str] | None = None
 
     async def __call__(self, task: str, observation: Observation, history: list[StepRecord]) -> Decision:
         if not self.api_key:
@@ -60,7 +62,7 @@ class OpenAICompatibleDecider:
             match = re.search(r"https?://[^\s，。；;]+", task)
             if match:
                 return Decision(thought="open the target URL from the task", action=Action.navigate(match.group(0)))
-        extracted = _deterministic_extraction(task, observation)
+        extracted = _deterministic_extraction(self, task, observation)
         if extracted is not None:
             return extracted
         payload = {
@@ -105,15 +107,35 @@ def _user_prompt(task: str, observation: Observation, history: list[StepRecord])
     )
 
 
-def _deterministic_extraction(task: str, observation: Observation) -> Decision | None:
+def _deterministic_extraction(decider: OpenAICompatibleDecider, task: str, observation: Observation) -> Decision | None:
     intent = task.lower()
     if not any(term in intent for term in ("所有网址", "所有链接", "全部网址", "全部链接", "all urls", "all links")):
         return None
-    links = list(dict.fromkeys(item.href for item in observation.elements if item.href))
-    if not links:
+    elements = []
+    seen = set()
+    for item in observation.elements:
+        if item.href and item.href not in seen:
+            seen.add(item.href)
+            elements.append(item)
+    if not elements:
         return None
-    message = f"共采集到 {len(links)} 个网址：\n" + "\n".join(f"{index}. {url}" for index, url in enumerate(links, 1))
-    return Decision(thought="all requested links are available in the current observation", done=True, success=True, message=message)
+    for item in elements:
+        decider._collected_links.setdefault(item.href, CollectedItem(url=item.href, title=item.name or None))
+
+    normalized = intent.replace(" ", "")
+    wants_multiple_sections = sum(term in normalized for term in ("工作台", "ai工具", "创作")) >= 2
+    if wants_multiple_sections:
+        if decider._pending_sections is None:
+            decider._pending_sections = [name for name in ("AI 工具", "创作") if name.replace(" ", "").lower() in normalized]
+        while decider._pending_sections:
+            section = decider._pending_sections.pop(0)
+            target = next((item for item in observation.elements if item.name.replace(" ", "").lower() == section.replace(" ", "").lower()), None)
+            if target is not None:
+                return Decision(thought=f"collect the next requested section: {section}", action=Action.click(index=target.index, observation_id=observation.observation_id))
+
+    collected = list(decider._collected_links.values())
+    message = f"共采集到 {len(collected)} 个网址：\n" + "\n".join(f"{index}. {item.url}" for index, item in enumerate(collected, 1))
+    return Decision(thought="all requested links are available in the current observation", done=True, success=True, message=message, collected_items=collected)
 
 
 async def _post_json(url: str, payload: dict, api_key: str) -> dict:

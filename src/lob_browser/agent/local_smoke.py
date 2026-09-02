@@ -22,7 +22,13 @@ async def main() -> None:
     trace = root / "artifacts" / "local-smoke.jsonl"
     trace.unlink(missing_ok=True)
     decider = LocalScriptedDecider(fixtures)
-    session = BrowserSession(SessionConfig(headless=True, artifact_dir=root / "artifacts"))
+    session = BrowserSession(
+        SessionConfig(
+            headless=True,
+            artifact_dir=root / "artifacts",
+            upload_roots=[fixtures / "files"],
+        )
+    )
     summaries = []
     try:
         await session.start()
@@ -87,6 +93,17 @@ async def main() -> None:
                 "ok": True,
                 "steps": len(wait_results),
                 "message": "text, selector, url, and load-state waits passed; timeout classified",
+            }
+        )
+        upload_results = await _verify_upload(session, fixtures, root)
+        for result in upload_results:
+            writer.write("action_result", task="受控文件上传验收", result=result)
+        summaries.append(
+            {
+                "task": "受控文件上传验收",
+                "ok": True,
+                "steps": len(upload_results),
+                "message": "authorized file uploaded with sha256; unauthorized path rejected",
             }
         )
         download_result = await _verify_download(session, fixtures)
@@ -320,6 +337,55 @@ async def _verify_wait_conditions(session: BrowserSession, fixtures: Path):
         raise SystemExit(f"expected wait timeout, got {timed_out.error_kind}")
     results.append(timed_out)
     return results
+
+
+async def _verify_upload(session: BrowserSession, fixtures: Path, root: Path):
+    await session.page.goto((fixtures / "upload.html").as_uri())
+    observation = await observe(session)
+    field = observation.find_name("上传文件")
+    assert field is not None
+    source = fixtures / "files" / "lob-report.txt"
+    uploaded = await run_action(
+        session,
+        Action.upload(
+            str(source),
+            index=field.index,
+            observation_id=observation.observation_id,
+        ),
+    )
+    if not uploaded.ok or len(uploaded.uploads) != 1:
+        raise SystemExit(f"authorized upload failed: {uploaded.error}")
+    expected_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+    if uploaded.uploads[0].sha256 != expected_hash:
+        raise SystemExit("upload sha256 mismatch")
+    ready = await run_action(session, Action.wait_for_text("LOB-DOWNLOAD-001", timeout_ms=2_000))
+    if not ready.ok:
+        raise SystemExit(f"uploaded content was not read: {ready.error}")
+
+    observation = await observe(session)
+    field = observation.find_name("上传文件")
+    assert field is not None
+    denied = await run_action(
+        session,
+        Action.upload(
+            str(root / "README.md"),
+            index=field.index,
+            observation_id=observation.observation_id,
+        ),
+    )
+    if denied.error_kind is not ErrorKind.UPLOAD_NOT_ALLOWED:
+        raise SystemExit(f"expected upload_not_allowed, got {denied.error_kind}")
+    missing = await run_action(
+        session,
+        Action.upload(
+            str(fixtures / "files" / "missing.txt"),
+            index=field.index,
+            observation_id=observation.observation_id,
+        ),
+    )
+    if missing.error_kind is not ErrorKind.UPLOAD_FILE_ERROR:
+        raise SystemExit(f"expected upload_file_error, got {missing.error_kind}")
+    return [uploaded, ready, denied, missing]
 
 
 if __name__ == "__main__":

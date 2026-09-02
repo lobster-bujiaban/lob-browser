@@ -78,6 +78,8 @@ open Shadow DOM 会递归观察，元素携带宿主 `shadow_path`；Playwright 
 
 等待动作除固定时长外，还支持元素可见、跨同源 Frame/开放 Shadow Root 的文本出现、URL 片段和页面加载状态；条件未在动作超时内满足时返回统一 `timeout` 结果。
 
+文件上传默认禁止，仅允许 `SessionConfig.upload_roots` 明确授权目录中的普通文件；真实路径解析后仍需位于授权根目录并满足大小上限，上传结果记录文件名、大小和 SHA-256，越权路径返回 `upload_not_allowed`。
+
 ## 项目边界
 
 - `lob-browser` 关注网页任务执行，不重复实现 `lob-harness` 的通用 Agent 运行框架。

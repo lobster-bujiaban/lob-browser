@@ -11,7 +11,7 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, Field, model_validator
 
-from lob_browser.browser.models import DialogInfo, DownloadInfo, TabInfo
+from lob_browser.browser.models import DialogInfo, DownloadInfo, TabInfo, UploadInfo
 
 
 class ActionKind(StrEnum):
@@ -27,6 +27,7 @@ class ActionKind(StrEnum):
     SWITCH_TAB = "switch_tab"
     CLOSE_TAB = "close_tab"
     DIALOG = "dialog"
+    UPLOAD = "upload"
 
 
 class ErrorKind(StrEnum):
@@ -38,6 +39,8 @@ class ErrorKind(StrEnum):
     STALE_ELEMENT = "stale_element"
     DIALOG_UNHANDLED = "dialog_unhandled"
     DOWNLOAD_FAILED = "download_failed"
+    UPLOAD_NOT_ALLOWED = "upload_not_allowed"
+    UPLOAD_FILE_ERROR = "upload_file_error"
     UNKNOWN = "unknown"
 
 
@@ -67,12 +70,13 @@ class Action(BaseModel):
     prompt_text: str | None = None
     wait_condition: WaitCondition | None = None
     load_state: Literal["domcontentloaded", "load", "networkidle"] | None = None
+    file_path: str | None = None
 
     @model_validator(mode="after")
     def require_fields(self) -> Self:
         if self.kind is ActionKind.NAVIGATE and not self.url:
             raise ValueError("navigate requires url")
-        if self.kind in {ActionKind.CLICK, ActionKind.TYPE, ActionKind.SELECT}:
+        if self.kind in {ActionKind.CLICK, ActionKind.TYPE, ActionKind.SELECT, ActionKind.UPLOAD}:
             if not self.selector and self.index is None:
                 raise ValueError(f"{self.kind} requires selector or index")
         if self.kind is ActionKind.TYPE and self.text is None:
@@ -83,6 +87,8 @@ class Action(BaseModel):
             raise ValueError("switch_tab requires tab_id")
         if self.kind is ActionKind.DIALOG and self.accept is None:
             raise ValueError("dialog requires accept")
+        if self.kind is ActionKind.UPLOAD and not self.file_path:
+            raise ValueError("upload requires file_path")
         if self.kind is ActionKind.WAIT:
             condition = self.wait_condition or WaitCondition.DURATION
             if condition is WaitCondition.SELECTOR_VISIBLE and not self.selector:
@@ -220,6 +226,25 @@ class Action(BaseModel):
     def dialog(cls, *, accept: bool, prompt_text: str | None = None) -> Self:
         return cls(kind=ActionKind.DIALOG, accept=accept, prompt_text=prompt_text)
 
+    @classmethod
+    def upload(
+        cls,
+        file_path: str,
+        selector: str | None = None,
+        *,
+        index: int | None = None,
+        observation_id: str | None = None,
+        timeout_ms: float | None = None,
+    ) -> Self:
+        return cls(
+            kind=ActionKind.UPLOAD,
+            file_path=file_path,
+            selector=selector,
+            index=index,
+            observation_id=observation_id,
+            timeout_ms=timeout_ms,
+        )
+
 
 class PageSnapshot(BaseModel):
     url: str = ""
@@ -247,3 +272,4 @@ class ActionResult(BaseModel):
     target_frame_path: list[int] = Field(default_factory=list)
     target_frame_url: str | None = None
     target_shadow_path: list[str] = Field(default_factory=list)
+    uploads: list[UploadInfo] = Field(default_factory=list)

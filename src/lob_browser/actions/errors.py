@@ -31,3 +31,11 @@ class DialogUnhandledError(ActionError):
 
 class DownloadError(ActionError):
     """A browser download failed."""
+
+
+class UploadNotAllowedError(ActionError):
+    """A file is outside the explicitly authorized upload roots."""
+
+
+class UploadFileError(ActionError):
+    """An upload path does not resolve to a readable regular file."""

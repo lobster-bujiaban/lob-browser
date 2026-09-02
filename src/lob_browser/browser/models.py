@@ -16,6 +16,8 @@ class SessionConfig(BaseModel):
     viewport_width: int = 1280
     viewport_height: int = 720
     artifact_dir: Path = Path("artifacts")
+    upload_roots: list[Path] = Field(default_factory=list)
+    max_upload_bytes: int = 10 * 1024 * 1024
 
 
 class TabInfo(BaseModel):
@@ -41,6 +43,13 @@ class DownloadInfo(BaseModel):
     size: int | None = None
     sha256: str | None = None
     failure: str | None = None
+
+
+class UploadInfo(BaseModel):
+    path: str
+    filename: str
+    size: int
+    sha256: str
 
 
 class SessionInfo(BaseModel):

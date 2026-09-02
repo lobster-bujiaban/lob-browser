@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>受控上传任务</title></head>
+<body>
+  <h1>受控文件上传</h1>
+  <label>上传文件 <input id="file" type="file" aria-label="上传文件"></label>
+  <p id="result" role="status">等待上传</p>
+  <script>
+    document.querySelector('#file').addEventListener('change', (event) => {
+      const file = event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.addEventListener('load', () => {
+        document.querySelector('#result').textContent = `${file.name}|${file.size}|${reader.result.trim()}`;
+      });
+      reader.readAsText(file);
+    });
+  </script>
+</body>
+</html>

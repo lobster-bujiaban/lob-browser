@@ -7,16 +7,18 @@ Uses Playwright locators instead of CDP backendNodeId; click/type/select target 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import time
+from pathlib import Path
 
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Frame, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeout
 
-from lob_browser.actions.errors import DialogUnhandledError, DownloadError, ElementNotFoundError, PageClosedError, StaleElementError
+from lob_browser.actions.errors import DialogUnhandledError, DownloadError, ElementNotFoundError, PageClosedError, StaleElementError, UploadFileError, UploadNotAllowedError
 from lob_browser.actions.models import Action, ActionKind, ActionResult, ErrorKind, PageSnapshot, WaitCondition
-from lob_browser.browser import BrowserSession, SessionNotStartedError
+from lob_browser.browser import BrowserSession, SessionNotStartedError, UploadInfo
 from lob_browser.browser.errors import TabError
 from lob_browser.observation import observe
 
@@ -46,10 +48,13 @@ async def run_action(session: BrowserSession, action: Action) -> ActionResult:
     session.take_download_events()
     dialogs = []
     downloads = []
+    uploads = []
     try:
         timeout_ms = action.timeout_ms if action.timeout_ms is not None else session.config.timeout_ms
         async with asyncio.timeout(timeout_ms / 1000 + 0.5):
             message = await _dispatch(session, action, timeout_ms)
+        if action.kind is ActionKind.UPLOAD:
+            uploads = [_upload_info(_authorized_upload_path(session, action.file_path or ""))]
         dialogs = session.take_dialog_events()
         downloads = session.take_download_events()
         if any(not dialog.configured for dialog in dialogs):
@@ -79,6 +84,7 @@ async def run_action(session: BrowserSession, action: Action) -> ActionResult:
             target_frame_path=target_frame_path,
             target_frame_url=target_frame_url,
             target_shadow_path=target_shadow_path,
+            uploads=uploads,
         )
     except Exception as exc:
         dialogs = dialogs or session.take_dialog_events()
@@ -102,6 +108,7 @@ async def run_action(session: BrowserSession, action: Action) -> ActionResult:
             target_frame_path=target_frame_path,
             target_frame_url=target_frame_url,
             target_shadow_path=target_shadow_path,
+            uploads=uploads,
         )
 
 
@@ -137,6 +144,10 @@ def classify_error(exc: BaseException) -> tuple[ErrorKind, str]:
         return ErrorKind.DIALOG_UNHANDLED, str(exc)
     if isinstance(exc, DownloadError):
         return ErrorKind.DOWNLOAD_FAILED, str(exc)
+    if isinstance(exc, UploadNotAllowedError):
+        return ErrorKind.UPLOAD_NOT_ALLOWED, str(exc)
+    if isinstance(exc, UploadFileError):
+        return ErrorKind.UPLOAD_FILE_ERROR, str(exc)
     if isinstance(exc, ElementNotFoundError):
         return ErrorKind.ELEMENT_NOT_FOUND, str(exc)
     if isinstance(exc, TabError):
@@ -200,6 +211,13 @@ async def _dispatch(session: BrowserSession, action: Action, timeout_ms: float) 
                 timeout=timeout_ms,
             )
             return f"selected {action.value} on {action.selector or action.index}"
+        case ActionKind.UPLOAD:
+            path = _authorized_upload_path(session, action.file_path or "")
+            await (await _target(session, page, action, timeout_ms)).set_input_files(
+                str(path),
+                timeout=timeout_ms,
+            )
+            return f"uploaded {path.name} into {action.selector or action.index}"
         case ActionKind.SCROLL:
             if action.selector or action.index is not None:
                 await (await _target(session, page, action, timeout_ms)).scroll_into_view_if_needed(
@@ -287,6 +305,28 @@ async def _wait_for_text(session: BrowserSession, text: str) -> None:
         if text in (await observe(session)).text:
             return
         await asyncio.sleep(0.05)
+
+
+def _authorized_upload_path(session: BrowserSession, raw_path: str) -> Path:
+    try:
+        path = Path(raw_path).expanduser().resolve(strict=True)
+    except OSError as exc:
+        raise UploadFileError(f"upload file not found: {raw_path}") from exc
+    if not path.is_file():
+        raise UploadFileError(f"upload path is not a regular file: {path}")
+    roots = [root.expanduser().resolve() for root in session.config.upload_roots]
+    if not roots or not any(path.is_relative_to(root) for root in roots):
+        raise UploadNotAllowedError(f"upload path is outside authorized roots: {path}")
+    if path.stat().st_size > session.config.max_upload_bytes:
+        raise UploadNotAllowedError(
+            f"upload file exceeds {session.config.max_upload_bytes} bytes: {path}"
+        )
+    return path
+
+
+def _upload_info(path: Path) -> UploadInfo:
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    return UploadInfo(path=str(path), filename=path.name, size=path.stat().st_size, sha256=digest)
 
 
 def _normalize_url(url: str) -> str:

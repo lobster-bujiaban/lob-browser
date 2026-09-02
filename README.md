@@ -37,7 +37,7 @@
 - [x] 阶段 1：浏览器会话与确定性动作闭环
 - [x] 阶段 2：页面感知与可交互元素抽取
 - [x] 阶段 3：模型驱动的 Browser Agent Loop
-- [ ] 阶段 4：动态页面、标签页与复杂交互
+- [x] 阶段 4：动态页面、标签页与复杂交互
 - [ ] 阶段 5：可靠执行、恢复与人工审批
 - [ ] 阶段 6：记忆、任务规划与多 Agent
 - [ ] 阶段 7：评测、可观测与生产化
@@ -83,6 +83,8 @@ open Shadow DOM 会递归观察，元素携带宿主 `shadow_path`；Playwright 
 无限滚动支持滚动直到文本或元素出现，并通过 `max_scrolls` 与 `settle_ms` 限制次数和异步稳定窗口；目标始终未出现时返回 `scroll_limit`，不会无界滚动。
 
 BrowserContext 可通过显式 `storage_state_path` 恢复登录态；保存状态只写入 `artifacts/<session_id>/state/` 且权限为 `0600`，对外仅返回路径、大小和 SHA-256，不读取或写入 Trace 中的 cookie/localStorage 内容。
+
+Agent Loop 对 `stale_element` 和 `element_not_found` 使用重新观察后有限重试，对等待、滚动和导航类超时使用指数退避；可能已产生副作用的点击超时以及权限、安全错误不会自动重放。Step 与 Trace 记录重试次数、原始步骤、恢复策略和退避时间。
 
 ## 项目边界
 

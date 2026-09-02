@@ -8,7 +8,8 @@ import json
 from pathlib import Path
 
 from lob_browser.actions import Action, ErrorKind, run_action
-from lob_browser.agent import LocalScriptedDecider, run_task
+from lob_browser.agent import Decision, LocalScriptedDecider, RetryPolicy, StopReason, run_task
+from lob_browser.agent.retry import recovery_strategy
 from lob_browser.agent.trace import TraceWriter
 from lob_browser.browser import BrowserSession, SessionConfig
 from lob_browser.observation import observe
@@ -138,6 +139,23 @@ async def main() -> None:
                 "ok": True,
                 "steps": 3,
                 "message": "state saved and restored without exposing credential values",
+            }
+        )
+        recovery, exhausted = await _verify_retry_recovery(session, fixtures, trace)
+        summaries.append(
+            {
+                "task": "重新观察恢复验收",
+                "ok": recovery.ok,
+                "steps": len(recovery.steps),
+                "message": recovery.message,
+            }
+        )
+        summaries.append(
+            {
+                "task": "重试上限验收",
+                "ok": exhausted.stop_reason is StopReason.RETRY_EXHAUSTED,
+                "steps": len(exhausted.steps),
+                "message": exhausted.message,
             }
         )
         print(json.dumps(summaries, ensure_ascii=False, indent=2))
@@ -399,6 +417,8 @@ async def _verify_upload(session: BrowserSession, fixtures: Path, root: Path):
     )
     if denied.error_kind is not ErrorKind.UPLOAD_NOT_ALLOWED:
         raise SystemExit(f"expected upload_not_allowed, got {denied.error_kind}")
+    if recovery_strategy(denied.action, denied) is not None:
+        raise SystemExit("security error must not be automatically retried")
     missing = await run_action(
         session,
         Action.upload(
@@ -494,6 +514,69 @@ async def _verify_storage_state(fixtures: Path, root: Path):
         server.close()
         await server.wait_closed()
     return results, state_info
+
+
+async def _verify_retry_recovery(session: BrowserSession, fixtures: Path, trace: Path):
+    await session.page.goto((fixtures / "recovery.html").as_uri())
+    first_attempt = True
+
+    async def decider(task, observation, history):
+        nonlocal first_attempt
+        if "恢复成功" in observation.text:
+            return Decision(done=True, success=True, message="stale element recovered")
+        target = observation.find_name("执行恢复目标")
+        if target is None:
+            return Decision(done=True, success=False, message="recovery target missing")
+        if first_attempt:
+            first_attempt = False
+            await session.page.evaluate(
+                "() => document.querySelector('#target').replaceWith(document.querySelector('#target').cloneNode(true))"
+            )
+        return Decision(
+            action=Action.click(index=target.index, observation_id=observation.observation_id),
+            thought="click recovery target",
+        )
+
+    result = await run_task(
+        session,
+        "元素替换后重新观察并恢复",
+        decider,
+        max_steps=5,
+        retry_policy=RetryPolicy(max_retries=2, base_backoff_ms=10),
+        trace_path=trace,
+    )
+    if not result.ok or len(result.steps) != 3:
+        raise SystemExit(f"retry recovery failed: {result.message}")
+    failed, retried = result.steps[0], result.steps[1]
+    if failed.result is None or failed.result.error_kind is not ErrorKind.STALE_ELEMENT:
+        raise SystemExit("first recovery attempt must fail with stale_element")
+    if retried.retry_attempt != 1 or retried.retry_of_step != 1 or not retried.result or not retried.result.ok:
+        raise SystemExit("retry metadata or successful retry missing")
+
+    await session.page.goto((fixtures / "recovery.html").as_uri())
+
+    async def always_stale(task, observation, history):
+        target = observation.find_name("执行恢复目标")
+        assert target is not None
+        await session.page.evaluate(
+            "() => document.querySelector('#target').replaceWith(document.querySelector('#target').cloneNode(true))"
+        )
+        return Decision(
+            action=Action.click(index=target.index, observation_id=observation.observation_id),
+            thought="force stale target",
+        )
+
+    exhausted = await run_task(
+        session,
+        "持续元素失效直到重试上限",
+        always_stale,
+        max_steps=5,
+        retry_policy=RetryPolicy(max_retries=1, base_backoff_ms=10),
+        trace_path=trace,
+    )
+    if exhausted.stop_reason is not StopReason.RETRY_EXHAUSTED or len(exhausted.steps) != 2:
+        raise SystemExit(f"retry limit was not enforced: {exhausted.stop_reason}")
+    return result, exhausted
 
 
 async def _serve_fixture(

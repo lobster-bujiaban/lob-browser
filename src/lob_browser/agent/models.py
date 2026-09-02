@@ -18,6 +18,7 @@ class StopReason(StrEnum):
     MAX_STEPS = "max_steps"
     TOKEN_BUDGET = "token_budget"
     REPEATED_FAILURE = "repeated_failure"
+    RETRY_EXHAUSTED = "retry_exhausted"
 
 
 class Decision(BaseModel):
@@ -38,6 +39,9 @@ class StepRecord(BaseModel):
     result: ActionResult | None = None
     error: str | None = None
     token_estimate: int = 0
+    retry_attempt: int = 0
+    retry_of_step: int | None = None
+    recovery_strategy: str | None = None
 
 
 class AgentResult(BaseModel):

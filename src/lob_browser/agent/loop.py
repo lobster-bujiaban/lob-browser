@@ -5,6 +5,7 @@ Mapped from browser-use 0.13.7 Agent.step; no EventBus, one structured action pe
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from lob_browser.actions import run_action
 from lob_browser.agent.models import AgentResult, Decision, StepRecord, StopReason
 from lob_browser.agent.validate import InvalidDecision, fingerprint, validate_decision
 from lob_browser.agent.trace import TraceWriter
+from lob_browser.agent.retry import RetryPolicy, recovery_strategy
 from lob_browser.browser import BrowserSession
 from lob_browser.observation import Observation, observe
 
@@ -26,13 +28,24 @@ async def run_task(
     max_steps: int = 8,
     max_tokens: int = 50_000,
     trace_path: str | Path | None = None,
+    retry_policy: RetryPolicy | None = None,
 ) -> AgentResult:
     steps: list[StepRecord] = []
     tokens_used = 0
     repeats = 0
+    policy = retry_policy or RetryPolicy()
+    retry_attempt = 0
+    retry_of_step: int | None = None
+    pending_recovery: str | None = None
     trace = TraceWriter(trace_path) if trace_path else None
     if trace:
-        trace.write("task_started", task=task, max_steps=max_steps, max_tokens=max_tokens)
+        trace.write(
+            "task_started",
+            task=task,
+            max_steps=max_steps,
+            max_tokens=max_tokens,
+            retry_policy=policy,
+        )
 
     for step_no in range(1, max_steps + 1):
         observation = await observe(session)
@@ -100,7 +113,7 @@ async def run_task(
 
         action = decision.action
         assert action is not None
-        if _is_repeat_failure(action, steps):
+        if retry_attempt == 0 and _is_repeat_failure(action, steps):
             repeats += 1
             steps.append(
                 StepRecord(
@@ -112,6 +125,8 @@ async def run_task(
                     action=action,
                     error="skipped repeated failed action",
                     token_estimate=observation.token_estimate,
+                    retry_attempt=retry_attempt,
+                    retry_of_step=retry_of_step,
                 )
             )
             if repeats >= 3:
@@ -125,21 +140,62 @@ async def run_task(
             continue
 
         result = await run_action(session, action)
+        strategy = recovery_strategy(action, result) if not result.ok else None
         if trace:
-            trace.write("action_result", step=step_no, result=result)
-        steps.append(
-            StepRecord(
+            trace.write(
+                "action_result",
                 step=step_no,
-                observation_id=observation.observation_id,
-                url=observation.url,
-                title=observation.title,
-                thought=decision.thought,
-                action=action,
                 result=result,
-                error=None if result.ok else result.error,
-                token_estimate=observation.token_estimate,
+                retry_attempt=retry_attempt,
+                retry_of_step=retry_of_step,
             )
+        record = StepRecord(
+            step=step_no,
+            observation_id=observation.observation_id,
+            url=observation.url,
+            title=observation.title,
+            thought=decision.thought,
+            action=action,
+            result=result,
+            error=None if result.ok else result.error,
+            token_estimate=observation.token_estimate,
+            retry_attempt=retry_attempt,
+            retry_of_step=retry_of_step,
+            recovery_strategy=pending_recovery if retry_attempt else strategy,
         )
+        steps.append(record)
+
+        if not result.ok and strategy:
+            if retry_attempt >= policy.max_retries:
+                return _finish(trace, AgentResult(
+                    ok=False,
+                    stop_reason=StopReason.RETRY_EXHAUSTED,
+                    message=f"retry limit {policy.max_retries} exhausted: {result.error}",
+                    steps=steps,
+                    tokens_used=tokens_used,
+                ))
+            next_attempt = retry_attempt + 1
+            retry_of_step = retry_of_step or step_no
+            pending_recovery = strategy
+            backoff_ms = policy.backoff_ms(next_attempt)
+            if trace:
+                trace.write(
+                    "retry_scheduled",
+                    step=step_no,
+                    retry_of_step=retry_of_step,
+                    retry_attempt=next_attempt,
+                    strategy=strategy,
+                    backoff_ms=backoff_ms,
+                    error_kind=result.error_kind,
+                    error=result.error,
+                )
+            retry_attempt = next_attempt
+            await asyncio.sleep(backoff_ms / 1000)
+            continue
+
+        retry_attempt = 0
+        retry_of_step = None
+        pending_recovery = None
 
     return _finish(trace, AgentResult(
         ok=False,

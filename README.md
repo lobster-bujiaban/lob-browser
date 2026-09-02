@@ -76,6 +76,8 @@ uv run python -m lob_browser.agent.local_smoke
 
 open Shadow DOM 会递归观察，元素携带宿主 `shadow_path`；Playwright 定位器穿透开放 Shadow Root，内部 DOM 变化会推进版本并使旧索引失效。closed Shadow Root 保持不可读边界。
 
+等待动作除固定时长外，还支持元素可见、跨同源 Frame/开放 Shadow Root 的文本出现、URL 片段和页面加载状态；条件未在动作超时内满足时返回统一 `timeout` 结果。
+
 ## 项目边界
 
 - `lob-browser` 关注网页任务执行，不重复实现 `lob-harness` 的通用 Agent 运行框架。

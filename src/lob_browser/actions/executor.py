@@ -15,9 +15,10 @@ from playwright.async_api import Frame, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeout
 
 from lob_browser.actions.errors import DialogUnhandledError, DownloadError, ElementNotFoundError, PageClosedError, StaleElementError
-from lob_browser.actions.models import Action, ActionKind, ActionResult, ErrorKind, PageSnapshot
+from lob_browser.actions.models import Action, ActionKind, ActionResult, ErrorKind, PageSnapshot, WaitCondition
 from lob_browser.browser import BrowserSession, SessionNotStartedError
 from lob_browser.browser.errors import TabError
+from lob_browser.observation import observe
 
 logger = logging.getLogger("lob_browser.actions")
 
@@ -211,9 +212,27 @@ async def _dispatch(session: BrowserSession, action: Action, timeout_ms: float) 
             await page.evaluate("amount => window.scrollBy(0, amount)", delta)
             return f"scrolled {action.direction} by {abs(delta)}"
         case ActionKind.WAIT:
-            duration_ms = min(max(action.duration_ms or 1000, 0), _MAX_WAIT_MS)
-            await asyncio.sleep(duration_ms / 1000)
-            return f"waited {duration_ms}ms"
+            condition = action.wait_condition or WaitCondition.DURATION
+            if condition is WaitCondition.DURATION:
+                duration_ms = min(max(action.duration_ms or 1000, 0), _MAX_WAIT_MS)
+                await asyncio.sleep(duration_ms / 1000)
+                return f"waited {duration_ms}ms"
+            if condition is WaitCondition.SELECTOR_VISIBLE:
+                await page.locator(action.selector or "").first.wait_for(state="visible", timeout=timeout_ms)
+                return f"wait condition met: selector {action.selector} visible"
+            if condition is WaitCondition.TEXT:
+                await _wait_for_text(session, action.value or "")
+                return f"wait condition met: text {action.value}"
+            if condition is WaitCondition.URL:
+                await page.wait_for_function(
+                    "fragment => location.href.includes(fragment)",
+                    arg=action.value,
+                    timeout=timeout_ms,
+                )
+                return f"wait condition met: url contains {action.value}"
+            if condition is WaitCondition.LOAD_STATE:
+                await page.wait_for_load_state(action.load_state, timeout=timeout_ms)
+                return f"wait condition met: load state {action.load_state}"
 
 
 async def _target(session: BrowserSession, page: Page, action: Action, timeout_ms: float):
@@ -261,6 +280,13 @@ async def _attached(page: Page | Frame, selector: str | None, timeout_ms: float)
     except PlaywrightTimeout as exc:
         raise ElementNotFoundError(selector) from exc
     return locator.first
+
+
+async def _wait_for_text(session: BrowserSession, text: str) -> None:
+    while True:
+        if text in (await observe(session)).text:
+            return
+        await asyncio.sleep(0.05)
 
 
 def _normalize_url(url: str) -> str:

@@ -78,6 +78,17 @@ async def main() -> None:
                 "message": "form submitted; popup handled; stale shadow index rejected",
             }
         )
+        wait_results = await _verify_wait_conditions(session, fixtures)
+        for result in wait_results:
+            writer.write("action_result", task="业务条件等待验收", result=result)
+        summaries.append(
+            {
+                "task": "业务条件等待验收",
+                "ok": True,
+                "steps": len(wait_results),
+                "message": "text, selector, url, and load-state waits passed; timeout classified",
+            }
+        )
         download_result = await _verify_download(session, fixtures)
         writer.write("action_result", task="下载处理验收", result=download_result)
         summaries.append(
@@ -275,6 +286,39 @@ async def _verify_shadow_dom(session: BrowserSession, fixtures: Path):
     if stale.error_kind is not ErrorKind.STALE_ELEMENT:
         raise SystemExit(f"expected stale shadow index, got {stale.error_kind}")
     results.append(stale)
+    return results
+
+
+async def _verify_wait_conditions(session: BrowserSession, fixtures: Path):
+    await session.page.goto((fixtures / "conditions.html").as_uri())
+    results = []
+    observation = await observe(session)
+    start = observation.find_name("开始异步处理")
+    assert start is not None
+    started = await run_action(
+        session,
+        Action.click(index=start.index, observation_id=observation.observation_id),
+    )
+    if not started.ok:
+        raise SystemExit(f"condition trigger failed: {started.error}")
+    results.append(started)
+
+    waits = (
+        Action.wait_for_text("处理完成", timeout_ms=2_000),
+        Action.wait_for_selector("#ready-action", timeout_ms=2_000),
+        Action.wait_for_url("#done", timeout_ms=2_000),
+        Action.wait_for_load_state("load", timeout_ms=2_000),
+    )
+    for action in waits:
+        result = await run_action(session, action)
+        if not result.ok:
+            raise SystemExit(f"condition wait failed: {action.wait_condition}: {result.error}")
+        results.append(result)
+
+    timed_out = await run_action(session, Action.wait_for_text("永不出现", timeout_ms=200))
+    if timed_out.error_kind is not ErrorKind.TIMEOUT:
+        raise SystemExit(f"expected wait timeout, got {timed_out.error_kind}")
+    results.append(timed_out)
     return results
 
 

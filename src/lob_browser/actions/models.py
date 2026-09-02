@@ -41,6 +41,14 @@ class ErrorKind(StrEnum):
     UNKNOWN = "unknown"
 
 
+class WaitCondition(StrEnum):
+    DURATION = "duration"
+    SELECTOR_VISIBLE = "selector_visible"
+    TEXT = "text"
+    URL = "url"
+    LOAD_STATE = "load_state"
+
+
 class Action(BaseModel):
     kind: ActionKind
     url: str | None = None
@@ -57,6 +65,8 @@ class Action(BaseModel):
     observation_id: str | None = None
     accept: bool | None = None
     prompt_text: str | None = None
+    wait_condition: WaitCondition | None = None
+    load_state: Literal["domcontentloaded", "load", "networkidle"] | None = None
 
     @model_validator(mode="after")
     def require_fields(self) -> Self:
@@ -73,6 +83,14 @@ class Action(BaseModel):
             raise ValueError("switch_tab requires tab_id")
         if self.kind is ActionKind.DIALOG and self.accept is None:
             raise ValueError("dialog requires accept")
+        if self.kind is ActionKind.WAIT:
+            condition = self.wait_condition or WaitCondition.DURATION
+            if condition is WaitCondition.SELECTOR_VISIBLE and not self.selector:
+                raise ValueError("selector_visible wait requires selector")
+            if condition in {WaitCondition.TEXT, WaitCondition.URL} and not self.value:
+                raise ValueError(f"{condition} wait requires value")
+            if condition is WaitCondition.LOAD_STATE and not self.load_state:
+                raise ValueError("load_state wait requires load_state")
         return self
 
     @classmethod
@@ -163,7 +181,28 @@ class Action(BaseModel):
 
     @classmethod
     def wait(cls, duration_ms: float = 1000) -> Self:
-        return cls(kind=ActionKind.WAIT, duration_ms=duration_ms)
+        return cls(kind=ActionKind.WAIT, wait_condition=WaitCondition.DURATION, duration_ms=duration_ms)
+
+    @classmethod
+    def wait_for_selector(cls, selector: str, *, timeout_ms: float | None = None) -> Self:
+        return cls(kind=ActionKind.WAIT, wait_condition=WaitCondition.SELECTOR_VISIBLE, selector=selector, timeout_ms=timeout_ms)
+
+    @classmethod
+    def wait_for_text(cls, text: str, *, timeout_ms: float | None = None) -> Self:
+        return cls(kind=ActionKind.WAIT, wait_condition=WaitCondition.TEXT, value=text, timeout_ms=timeout_ms)
+
+    @classmethod
+    def wait_for_url(cls, fragment: str, *, timeout_ms: float | None = None) -> Self:
+        return cls(kind=ActionKind.WAIT, wait_condition=WaitCondition.URL, value=fragment, timeout_ms=timeout_ms)
+
+    @classmethod
+    def wait_for_load_state(
+        cls,
+        state: Literal["domcontentloaded", "load", "networkidle"],
+        *,
+        timeout_ms: float | None = None,
+    ) -> Self:
+        return cls(kind=ActionKind.WAIT, wait_condition=WaitCondition.LOAD_STATE, load_state=state, timeout_ms=timeout_ms)
 
     @classmethod
     def new_tab(cls, url: str | None = None, *, timeout_ms: float | None = None) -> Self:

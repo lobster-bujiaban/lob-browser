@@ -112,6 +112,15 @@ python3 -m http.server 8080 --directory web
 
 启动任务 API：
 
+首次部署时，先由 PostgreSQL 管理员创建应用数据库和最小权限账号：
+
+```bash
+psql -h <host> -U postgres -d postgres \
+  -v app_password='<strong-password>' -f deploy/postgres-init.sql
+```
+
+脚本不保存固定密码且可重复执行；再次执行会将 `lob_browser` 账号更新为本次传入的密码。启动前需通过本地 `.env` 或环境变量提供使用该密码的 `DATABASE_URL`。
+
 ```bash
 uv run uvicorn lob_browser.web.api:app --reload --port 8090
 ```

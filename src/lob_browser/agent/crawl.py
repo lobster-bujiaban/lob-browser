@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
+import re
 from urllib.parse import urljoin, urlparse, urldefrag
 
 from pydantic import BaseModel, Field
@@ -20,6 +21,7 @@ class CrawlPlan(BaseModel):
     follow_same_origin: bool = True
     fields: list[str] = Field(default_factory=lambda: ["url", "title", "content", "published_at", "author"])
     collect_url_pattern: str | None = None
+    collect_article_details: bool = False
 
 
 class GenericCrawler:
@@ -30,6 +32,7 @@ class GenericCrawler:
         self.root_host = urlparse(plan.start_url).hostname
         self.pending: deque[tuple[str, int]] = deque([(plan.start_url, 0)])
         self.depths: dict[str, int] = {_normalize(plan.start_url): 0}
+        self.discovered_titles: dict[str, str] = {}
         self.visited: set[str] = set()
         self.collected: dict[str, CollectedItem] = {}
 
@@ -61,6 +64,16 @@ class GenericCrawler:
         return self.depths.get(current, 1)
 
     def _extract(self, observation: Observation) -> None:
+        if self.plan.collect_article_details and _looks_like_article_url(observation.url):
+            published = _extract_date(observation.text)
+            content = observation.text.strip() or None
+            self.collected[_normalize(observation.url)] = CollectedItem(
+                url=_normalize(observation.url), title=self.discovered_titles.get(_normalize(observation.url)) or observation.title or None,
+                content=content, published_at=published, author=_extract_author(observation.text),
+            )
+            return
+        if self.plan.collect_article_details:
+            return
         for element in observation.elements:
             if not element.href or element.href == "#":
                 continue
@@ -87,6 +100,15 @@ class GenericCrawler:
             host = urlparse(url).hostname
             if self.plan.follow_same_origin and host != self.root_host:
                 continue
+            if self.plan.collect_article_details:
+                if depth != 0 or not _looks_like_article_url(url):
+                    continue
+                self.pending.append((url, depth + 1))
+                self.depths[url] = depth + 1
+                if element.name:
+                    self.discovered_titles[url] = element.name
+                known.add(url)
+                continue
             if not _looks_like_navigation(element.class_name, element.name, url):
                 continue
             self.pending.append((url, depth + 1))
@@ -102,3 +124,18 @@ def _normalize(url: str) -> str:
 def _looks_like_navigation(class_name: str | None, name: str, url: str) -> bool:
     marker = f"{class_name or ''} {name} {url}".lower()
     return any(term in marker for term in ("category", "column", "col_item", "栏目", "分类", "/list.", "/list/"))
+
+
+def _looks_like_article_url(url: str) -> bool:
+    path = urlparse(url).path.lower()
+    return bool(re.search(r"/20\d{2}/\d{4}/c\d+a\d+", path) or re.search(r"/20\d{2}/\d{2}/\d{2}/", path))
+
+
+def _extract_date(text: str) -> str | None:
+    match = re.search(r"(?:20\d{2}|19\d{2})[-年/.](?:0?[1-9]|1[0-2])[-月/.](?:0?[1-9]|[12]\d|3[01])日?", text)
+    return match.group(0) if match else None
+
+
+def _extract_author(text: str) -> str | None:
+    match = re.search(r"(?:作者|撰稿|来源)[:：]\s*([^\s|]{2,40})", text)
+    return match.group(1) if match else None

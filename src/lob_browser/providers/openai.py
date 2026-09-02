@@ -221,7 +221,11 @@ async def plan_crawl(task: str) -> CrawlPlan | None:
         max_pages=20,
         collect_external_only=any(term in normalized for term in ("独立站点", "外部站点", "外链")),
         collect_url_pattern="list." if any(term in normalized for term in ("所有列表页", "全部列表页", "列表页面")) else None,
+        collect_article_details=any(term in normalized for term in ("完整文章内容", "文章详情", "正文内容", "标题、内容", "标题内容")),
     )
+    if fallback.collect_article_details:
+        fallback.max_depth = 1
+        fallback.max_pages = 30
     if not api_key:
         return fallback
     payload = {
@@ -229,7 +233,7 @@ async def plan_crawl(task: str) -> CrawlPlan | None:
         "temperature": 0,
         "response_format": {"type": "json_object"},
         "messages": [
-            {"role": "system", "content": "Convert web collection requests into a bounded crawl plan JSON with keys: start_url, max_depth (0-3), max_pages (1-50), collect_external_only, follow_same_origin, fields, collect_url_pattern (optional substring such as list.). Return {\"crawl\":false} when the request is an interactive browser task rather than collection."},
+            {"role": "system", "content": "Convert web collection requests into a bounded crawl plan JSON with keys: start_url, max_depth (0-3), max_pages (1-50), collect_external_only, follow_same_origin, fields, collect_url_pattern, collect_article_details. Set collect_article_details=true when asked for full article title/body/date/author from a list page. Return {\"crawl\":false} when the request is interactive rather than collection."},
             {"role": "user", "content": task},
         ],
     }
@@ -240,6 +244,9 @@ async def plan_crawl(task: str) -> CrawlPlan | None:
             return None
         if fallback.collect_url_pattern and not parsed.get("collect_url_pattern"):
             parsed["collect_url_pattern"] = fallback.collect_url_pattern
+        if fallback.collect_article_details:
+            parsed["collect_article_details"] = True
+            parsed["max_depth"] = 1
         return CrawlPlan.model_validate({**fallback.model_dump(), **parsed})
     except Exception:
         return fallback

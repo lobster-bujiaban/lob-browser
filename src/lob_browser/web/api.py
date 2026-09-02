@@ -27,6 +27,7 @@ class TaskTitle(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.db = await connect()
+    app.state.running_tasks = {}
     await init(app.state.db)
     yield
     await app.state.db.close()
@@ -58,7 +59,7 @@ async def health(request: Request):
 async def new_task(body: CreateTask, request: Request):
     task_id = uuid4()
     await create_task(request.app.state.db, task_id, body.prompt)
-    asyncio.create_task(_execute_task(request.app.state.db, task_id, body.prompt, body.mode))
+    _start_execution(request.app, task_id, body.prompt, body.mode)
     return await task(request.app.state.db, task_id)
 
 @app.post("/api/tasks/empty", status_code=201)
@@ -72,7 +73,7 @@ async def run_existing_task(task_id: UUID, body: CreateTask, request: Request):
     if not await prepare_task(request.app.state.db, task_id, body.prompt):
         raise HTTPException(404, "task not found")
     await append_message(request.app.state.db, task_id, "user", body.prompt)
-    asyncio.create_task(_execute_task(request.app.state.db, task_id, body.prompt, body.mode))
+    _start_execution(request.app, task_id, body.prompt, body.mode)
     return await task(request.app.state.db, task_id)
 
 @app.get("/api/tasks")
@@ -100,6 +101,28 @@ async def update_task_title(task_id: UUID, body: TaskTitle, request: Request):
         raise HTTPException(404, "task not found")
     return await task(request.app.state.db, task_id)
 
+@app.post("/api/tasks/{task_id}/cancel")
+async def cancel_task(task_id: UUID, request: Request):
+    job = request.app.state.running_tasks.get(task_id)
+    if job is None or job.done():
+        value = await task(request.app.state.db, task_id)
+        if value is None:
+            raise HTTPException(404, "task not found")
+        if value["status"] not in {"pending", "running"}:
+            raise HTTPException(409, "task is not running")
+    else:
+        job.cancel()
+    message = "任务已由用户终止"
+    await append_message(request.app.state.db, task_id, "system", message)
+    await set_task_status(request.app.state.db, task_id, "cancelled", message)
+    return await task(request.app.state.db, task_id)
+
+
+def _start_execution(app: FastAPI, task_id: UUID, prompt: str, mode: str) -> None:
+    job = asyncio.create_task(_execute_task(app.state.db, task_id, prompt, mode))
+    app.state.running_tasks[task_id] = job
+    job.add_done_callback(lambda _job: app.state.running_tasks.pop(task_id, None))
+
 async def _execute_task(pool, task_id: UUID, prompt: str, mode: str = "auto") -> None:
     prompt = await conversation_prompt(pool, task_id)
     plan = await plan_crawl(prompt) if mode in {"auto", "crawl"} else None
@@ -120,6 +143,8 @@ async def _execute_task(pool, task_id: UUID, prompt: str, mode: str = "auto") ->
         await save_collected_items(pool, task_id, [item.model_dump() for item in result.collected_items])
         await append_message(pool, task_id, "assistant" if result.ok else "system", result.message)
         await set_task_status(pool, task_id, "completed" if result.ok else "failed", result.message, result.model_dump(mode="json"))
+    except asyncio.CancelledError:
+        raise
     except Exception as exc:
         message = f"执行失败：{type(exc).__name__}: {exc}"
         await append_message(pool, task_id, "system", message)

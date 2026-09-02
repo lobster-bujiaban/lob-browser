@@ -106,6 +106,17 @@ async def main() -> None:
                 "message": "authorized file uploaded with sha256; unauthorized path rejected",
             }
         )
+        scroll_results = await _verify_infinite_scroll(session, fixtures)
+        for result in scroll_results:
+            writer.write("action_result", task="无限滚动验收", result=result)
+        summaries.append(
+            {
+                "task": "无限滚动验收",
+                "ok": True,
+                "steps": len(scroll_results),
+                "message": "lazy target found; missing target stopped at scroll limit",
+            }
+        )
         download_result = await _verify_download(session, fixtures)
         writer.write("action_result", task="下载处理验收", result=download_result)
         summaries.append(
@@ -386,6 +397,37 @@ async def _verify_upload(session: BrowserSession, fixtures: Path, root: Path):
     if missing.error_kind is not ErrorKind.UPLOAD_FILE_ERROR:
         raise SystemExit(f"expected upload_file_error, got {missing.error_kind}")
     return [uploaded, ready, denied, missing]
+
+
+async def _verify_infinite_scroll(session: BrowserSession, fixtures: Path):
+    await session.page.goto((fixtures / "infinite.html").as_uri())
+    found = await run_action(
+        session,
+        Action.scroll_until_selector(
+            "#target-record",
+            amount=700,
+            max_scrolls=6,
+            settle_ms=120,
+            timeout_ms=3_000,
+        ),
+    )
+    if not found.ok or "目标记录 LOB-042" not in (await observe(session)).text:
+        raise SystemExit(f"infinite scroll target failed: {found.error}")
+
+    await session.page.goto((fixtures / "infinite.html").as_uri())
+    limited = await run_action(
+        session,
+        Action.scroll_until_text(
+            "不存在的记录",
+            amount=300,
+            max_scrolls=2,
+            settle_ms=50,
+            timeout_ms=1_000,
+        ),
+    )
+    if limited.error_kind is not ErrorKind.SCROLL_LIMIT:
+        raise SystemExit(f"expected scroll_limit, got {limited.error_kind}")
+    return [found, limited]
 
 
 if __name__ == "__main__":

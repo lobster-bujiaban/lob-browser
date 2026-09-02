@@ -39,3 +39,7 @@ class UploadNotAllowedError(ActionError):
 
 class UploadFileError(ActionError):
     """An upload path does not resolve to a readable regular file."""
+
+
+class ScrollLimitError(ActionError):
+    """A scroll condition was not met within the configured number of scrolls."""

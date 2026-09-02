@@ -80,6 +80,8 @@ open Shadow DOM 会递归观察，元素携带宿主 `shadow_path`；Playwright 
 
 文件上传默认禁止，仅允许 `SessionConfig.upload_roots` 明确授权目录中的普通文件；真实路径解析后仍需位于授权根目录并满足大小上限，上传结果记录文件名、大小和 SHA-256，越权路径返回 `upload_not_allowed`。
 
+无限滚动支持滚动直到文本或元素出现，并通过 `max_scrolls` 与 `settle_ms` 限制次数和异步稳定窗口；目标始终未出现时返回 `scroll_limit`，不会无界滚动。
+
 ## 项目边界
 
 - `lob-browser` 关注网页任务执行，不重复实现 `lob-harness` 的通用 Agent 运行框架。

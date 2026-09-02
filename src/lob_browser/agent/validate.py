@@ -43,4 +43,7 @@ def fingerprint(action: Action) -> tuple[object, ...]:
         action.wait_condition,
         action.load_state,
         action.file_path,
+        action.until_text,
+        action.until_selector,
+        action.max_scrolls,
     )

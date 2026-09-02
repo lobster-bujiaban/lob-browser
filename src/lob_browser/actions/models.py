@@ -41,6 +41,7 @@ class ErrorKind(StrEnum):
     DOWNLOAD_FAILED = "download_failed"
     UPLOAD_NOT_ALLOWED = "upload_not_allowed"
     UPLOAD_FILE_ERROR = "upload_file_error"
+    SCROLL_LIMIT = "scroll_limit"
     UNKNOWN = "unknown"
 
 
@@ -71,6 +72,10 @@ class Action(BaseModel):
     wait_condition: WaitCondition | None = None
     load_state: Literal["domcontentloaded", "load", "networkidle"] | None = None
     file_path: str | None = None
+    until_text: str | None = None
+    until_selector: str | None = None
+    max_scrolls: int = 8
+    settle_ms: float = 200
 
     @model_validator(mode="after")
     def require_fields(self) -> Self:
@@ -97,6 +102,11 @@ class Action(BaseModel):
                 raise ValueError(f"{condition} wait requires value")
             if condition is WaitCondition.LOAD_STATE and not self.load_state:
                 raise ValueError("load_state wait requires load_state")
+        if self.kind is ActionKind.SCROLL:
+            if self.until_text and self.until_selector:
+                raise ValueError("scroll accepts only one until condition")
+            if self.max_scrolls < 1:
+                raise ValueError("max_scrolls must be positive")
         return self
 
     @classmethod
@@ -182,6 +192,44 @@ class Action(BaseModel):
             direction=direction,
             amount=amount,
             selector=selector,
+            timeout_ms=timeout_ms,
+        )
+
+    @classmethod
+    def scroll_until_text(
+        cls,
+        text: str,
+        *,
+        amount: int = 800,
+        max_scrolls: int = 8,
+        settle_ms: float = 200,
+        timeout_ms: float | None = None,
+    ) -> Self:
+        return cls(
+            kind=ActionKind.SCROLL,
+            amount=amount,
+            until_text=text,
+            max_scrolls=max_scrolls,
+            settle_ms=settle_ms,
+            timeout_ms=timeout_ms,
+        )
+
+    @classmethod
+    def scroll_until_selector(
+        cls,
+        selector: str,
+        *,
+        amount: int = 800,
+        max_scrolls: int = 8,
+        settle_ms: float = 200,
+        timeout_ms: float | None = None,
+    ) -> Self:
+        return cls(
+            kind=ActionKind.SCROLL,
+            amount=amount,
+            until_selector=selector,
+            max_scrolls=max_scrolls,
+            settle_ms=settle_ms,
             timeout_ms=timeout_ms,
         )
 

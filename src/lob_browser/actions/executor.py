@@ -16,7 +16,7 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Frame, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeout
 
-from lob_browser.actions.errors import DialogUnhandledError, DownloadError, ElementNotFoundError, PageClosedError, StaleElementError, UploadFileError, UploadNotAllowedError
+from lob_browser.actions.errors import DialogUnhandledError, DownloadError, ElementNotFoundError, PageClosedError, ScrollLimitError, StaleElementError, UploadFileError, UploadNotAllowedError
 from lob_browser.actions.models import Action, ActionKind, ActionResult, ErrorKind, PageSnapshot, WaitCondition
 from lob_browser.browser import BrowserSession, SessionNotStartedError, UploadInfo
 from lob_browser.browser.errors import TabError
@@ -148,6 +148,8 @@ def classify_error(exc: BaseException) -> tuple[ErrorKind, str]:
         return ErrorKind.UPLOAD_NOT_ALLOWED, str(exc)
     if isinstance(exc, UploadFileError):
         return ErrorKind.UPLOAD_FILE_ERROR, str(exc)
+    if isinstance(exc, ScrollLimitError):
+        return ErrorKind.SCROLL_LIMIT, str(exc)
     if isinstance(exc, ElementNotFoundError):
         return ErrorKind.ELEMENT_NOT_FOUND, str(exc)
     if isinstance(exc, TabError):
@@ -219,6 +221,10 @@ async def _dispatch(session: BrowserSession, action: Action, timeout_ms: float) 
             )
             return f"uploaded {path.name} into {action.selector or action.index}"
         case ActionKind.SCROLL:
+            if action.until_text or action.until_selector:
+                count = await _scroll_until(session, page, action)
+                condition = action.until_text or action.until_selector
+                return f"scroll condition met after {count} scrolls: {condition}"
             if action.selector or action.index is not None:
                 await (await _target(session, page, action, timeout_ms)).scroll_into_view_if_needed(
                     timeout=timeout_ms,
@@ -305,6 +311,25 @@ async def _wait_for_text(session: BrowserSession, text: str) -> None:
         if text in (await observe(session)).text:
             return
         await asyncio.sleep(0.05)
+
+
+async def _scroll_until(session: BrowserSession, page: Page, action: Action) -> int:
+    delta = abs(action.amount or 800)
+    if action.direction == "up":
+        delta = -delta
+    for count in range(action.max_scrolls + 1):
+        if action.until_text and action.until_text in (await observe(session)).text:
+            return count
+        if action.until_selector and await page.locator(action.until_selector).first.is_visible():
+            return count
+        if count == action.max_scrolls:
+            break
+        await page.evaluate("amount => window.scrollBy(0, amount)", delta)
+        await asyncio.sleep(max(action.settle_ms, 0) / 1000)
+    condition = action.until_text or action.until_selector or "<missing>"
+    raise ScrollLimitError(
+        f"scroll condition not met after {action.max_scrolls} scrolls: {condition}"
+    )
 
 
 def _authorized_upload_path(session: BrowserSession, raw_path: str) -> Path:

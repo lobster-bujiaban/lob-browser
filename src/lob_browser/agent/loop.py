@@ -20,6 +20,7 @@ from lob_browser.observation import Observation, observe
 from lob_browser.runtime import CheckpointStatus, CheckpointStep, CheckpointStore, SideEffectRecord, SideEffectStatus, TaskCheckpoint, side_effect_key
 
 Decider = Callable[[str, Observation, list[StepRecord]], Awaitable[Decision]]
+StepObserver = Callable[[list[StepRecord]], Awaitable[None]]
 
 
 async def run_task(
@@ -35,6 +36,7 @@ async def run_task(
     approval_handler: ApprovalHandler | None = None,
     checkpoint_path: str | Path | None = None,
     run_id: str | None = None,
+    on_steps: StepObserver | None = None,
 ) -> AgentResult:
     steps: list[StepRecord] = []
     approvals: list[ApprovalRecord] = []
@@ -55,6 +57,7 @@ async def run_task(
     retry_attempt = 0
     retry_of_step: int | None = None
     pending_recovery: str | None = None
+    repeated_error_pages = 0
     trace = TraceWriter(trace_path) if trace_path else None
     if trace:
         trace.write(
@@ -70,6 +73,12 @@ async def run_task(
         if trace:
             trace.write("observation", step=step_no, observation=observation)
         tokens_used += observation.token_estimate
+        error_page = _is_browser_error_page(observation)
+        repeated_error_pages = repeated_error_pages + 1 if error_page else 0
+        if repeated_error_pages >= 3:
+            message = f"browser remained on error page: {observation.title or observation.url}"
+            steps.append(StepRecord(step=step_no, observation_id=observation.observation_id, url=observation.url, title=observation.title, error=message, token_estimate=observation.token_estimate))
+            return _finish(trace, approvals, checkpoint_store, checkpoint, AgentResult(ok=False, stop_reason=StopReason.REPEATED_FAILURE, message=message, steps=steps, tokens_used=tokens_used))
         if tokens_used > max_tokens:
             return _finish(trace, approvals, checkpoint_store, checkpoint, AgentResult(
                 ok=False,
@@ -297,6 +306,8 @@ async def run_task(
             approval_reason=assessment.reason if approval else None,
         )
         steps.append(record)
+        if on_steps:
+            await on_steps(steps)
         if checkpoint and checkpoint_store:
             checkpoint.next_step = step_no + 1
             checkpoint.last_url = observation.url
@@ -370,3 +381,11 @@ def _is_repeat_failure(action, steps: list[StepRecord]) -> bool:
     if last.action is None or last.error is None:
         return False
     return fingerprint(last.action) == fingerprint(action)
+
+
+def _is_browser_error_page(observation: Observation) -> bool:
+    title = observation.title.lower()
+    url = observation.url.lower()
+    text = observation.text.lower()[:500]
+    markers = ("502 bad gateway", "503 service unavailable", "504 gateway timeout", "err_", "无法访问此网站")
+    return url.startswith("chrome-error://") or any(marker in title or marker in text for marker in markers)

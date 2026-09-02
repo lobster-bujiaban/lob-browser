@@ -104,11 +104,16 @@ async def _execute_task(pool, task_id: UUID, prompt: str) -> None:
     session = BrowserSession(SessionConfig(headless=True))
     try:
         await session.start()
-        result = await run_task(session, prompt, OpenAICompatibleDecider(), max_steps=12, trace_path=f"artifacts/{task_id}.jsonl")
-        rows = [{"step_no": step.step, "status": "done" if step.result and step.result.ok else "failed" if step.error else "done", "label": step.action.kind.value if step.action else "完成判断", "detail": step.error or (step.result.message if step.result else step.thought), "payload": step.model_dump(mode="json")} for step in result.steps]
+        async def persist_steps(steps):
+            await save_steps(pool, task_id, _step_rows(steps))
+        result = await run_task(session, prompt, OpenAICompatibleDecider(), max_steps=12, trace_path=f"artifacts/{task_id}.jsonl", on_steps=persist_steps)
+        rows = _step_rows(result.steps)
         await save_steps(pool, task_id, rows)
         await set_task_status(pool, task_id, "completed" if result.ok else "failed", result.message, result.model_dump(mode="json"))
     except Exception as exc:
         await set_task_status(pool, task_id, "failed", f"执行失败：{type(exc).__name__}: {exc}")
     finally:
         await session.close()
+
+def _step_rows(steps) -> list[dict]:
+    return [{"step_no": step.step, "status": "succeeded" if step.result and step.result.ok else "failed" if step.error or (step.result and not step.result.ok) else "observed", "label": step.action.kind.value if step.action else "完成判断", "detail": step.error or (step.result.message if step.result else step.thought), "payload": step.model_dump(mode="json")} for step in steps]

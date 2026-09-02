@@ -528,6 +528,8 @@ async def _verify_storage_state(fixtures: Path, root: Path):
 
 async def _verify_retry_recovery(session: BrowserSession, fixtures: Path, trace: Path):
     await session.page.goto((fixtures / "recovery.html").as_uri())
+    checkpoint_file = trace.parent / "checkpoints" / "recovery-success.json"
+    checkpoint_file.unlink(missing_ok=True)
     first_attempt = True
 
     async def decider(task, observation, history):
@@ -554,9 +556,22 @@ async def _verify_retry_recovery(session: BrowserSession, fixtures: Path, trace:
         max_steps=5,
         retry_policy=RetryPolicy(max_retries=2, base_backoff_ms=10),
         trace_path=trace,
+        checkpoint_path=trace.parent / "checkpoints" / "recovery",
+        run_id="recovery-success",
     )
     if not result.ok or len(result.steps) != 3:
         raise SystemExit(f"retry recovery failed: {result.message}")
+    resumed = await run_task(
+        session,
+        "元素替换后重新观察并恢复",
+        decider,
+        max_steps=5,
+        retry_policy=RetryPolicy(max_retries=2, base_backoff_ms=10),
+        checkpoint_path=trace.parent / "checkpoints" / "recovery",
+        run_id="recovery-success",
+    )
+    if not resumed.ok or resumed.message != "checkpoint already completed":
+        raise SystemExit("completed checkpoint was not safely resumable")
     failed, retried = result.steps[0], result.steps[1]
     if failed.result is None or failed.result.error_kind is not ErrorKind.STALE_ELEMENT:
         raise SystemExit("first recovery attempt must fail with stale_element")

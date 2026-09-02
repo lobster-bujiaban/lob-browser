@@ -23,6 +23,8 @@ class StopReason(StrEnum):
     APPROVAL_REQUIRED = "approval_required"
     APPROVAL_REJECTED = "approval_rejected"
     CANCELLED = "cancelled"
+    SIDE_EFFECT_BLOCKED = "side_effect_blocked"
+    SIDE_EFFECT_UNCERTAIN = "side_effect_uncertain"
 
 
 class Decision(BaseModel):
@@ -59,3 +61,5 @@ class AgentResult(BaseModel):
     steps: list[StepRecord] = Field(default_factory=list)
     tokens_used: int = 0
     approvals: list[ApprovalRecord] = Field(default_factory=list)
+    run_id: str | None = None
+    checkpoint_path: str | None = None

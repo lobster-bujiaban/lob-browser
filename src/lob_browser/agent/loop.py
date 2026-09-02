@@ -17,6 +17,7 @@ from lob_browser.agent.trace import TraceWriter
 from lob_browser.agent.retry import RetryPolicy, recovery_strategy
 from lob_browser.browser import BrowserSession
 from lob_browser.observation import Observation, observe
+from lob_browser.runtime import CheckpointStatus, CheckpointStep, CheckpointStore, SideEffectRecord, SideEffectStatus, TaskCheckpoint, side_effect_key
 
 Decider = Callable[[str, Observation, list[StepRecord]], Awaitable[Decision]]
 
@@ -32,9 +33,21 @@ async def run_task(
     retry_policy: RetryPolicy | None = None,
     approval_policy: ApprovalPolicy | None = None,
     approval_handler: ApprovalHandler | None = None,
+    checkpoint_path: str | Path | None = None,
+    run_id: str | None = None,
 ) -> AgentResult:
     steps: list[StepRecord] = []
     approvals: list[ApprovalRecord] = []
+    checkpoint_store = CheckpointStore(Path(checkpoint_path).parent) if checkpoint_path else None
+    checkpoint = None
+    if checkpoint_store and run_id and checkpoint_store.path_for(run_id).exists():
+        checkpoint = checkpoint_store.load(run_id)
+        if checkpoint.status is CheckpointStatus.COMPLETED:
+            return AgentResult(ok=True, stop_reason=StopReason.DONE, message="checkpoint already completed", run_id=checkpoint.run_id, checkpoint_path=str(checkpoint_store.path_for(run_id)))
+    if checkpoint_store:
+        checkpoint = checkpoint or TaskCheckpoint(task=task, run_id=run_id or TaskCheckpoint(task=task).run_id)
+        checkpoint.task = task
+        checkpoint_store.save(checkpoint)
     tokens_used = 0
     repeats = 0
     policy = retry_policy or RetryPolicy()
@@ -58,7 +71,7 @@ async def run_task(
             trace.write("observation", step=step_no, observation=observation)
         tokens_used += observation.token_estimate
         if tokens_used > max_tokens:
-            return _finish(trace, approvals, AgentResult(
+            return _finish(trace, approvals, checkpoint_store, checkpoint, AgentResult(
                 ok=False,
                 stop_reason=StopReason.TOKEN_BUDGET,
                 message=f"token budget {max_tokens} exceeded",
@@ -108,7 +121,7 @@ async def run_task(
                     token_estimate=observation.token_estimate,
                 )
             )
-            return _finish(trace, approvals, AgentResult(
+            return _finish(trace, approvals, checkpoint_store, checkpoint, AgentResult(
                 ok=decision.success,
                 stop_reason=StopReason.DONE if decision.success else StopReason.FAILED,
                 message=decision.message or decision.thought,
@@ -135,7 +148,7 @@ async def run_task(
                 )
             )
             if repeats >= 3:
-                return _finish(trace, approvals, AgentResult(
+                return _finish(trace, approvals, checkpoint_store, checkpoint, AgentResult(
                     ok=False,
                     stop_reason=StopReason.REPEATED_FAILURE,
                     message="same failed action repeated",
@@ -146,6 +159,24 @@ async def run_task(
 
         assessment = risk_policy.assess(task, action, observation)
         approval: ApprovalRecord | None = None
+        effect_key = side_effect_key(task, observation.url, action.kind, assessment.target_name)
+        prior_effect = checkpoint.side_effects.get(effect_key) if checkpoint else None
+        if prior_effect and prior_effect.status in {SideEffectStatus.PENDING, SideEffectStatus.UNCERTAIN}:
+            return _finish(trace, approvals, checkpoint_store, checkpoint, AgentResult(
+                ok=False,
+                stop_reason=StopReason.SIDE_EFFECT_UNCERTAIN,
+                message=f"side effect requires review: {effect_key}",
+                steps=steps,
+                tokens_used=tokens_used,
+            ))
+        if prior_effect and prior_effect.status is SideEffectStatus.COMPLETED:
+            return _finish(trace, approvals, checkpoint_store, checkpoint, AgentResult(
+                ok=False,
+                stop_reason=StopReason.SIDE_EFFECT_BLOCKED,
+                message=f"side effect already completed: {effect_key}",
+                steps=steps,
+                tokens_used=tokens_used,
+            ))
         if assessment.level is RiskLevel.HIGH:
             approval = ApprovalRecord(
                 task=task,
@@ -176,7 +207,7 @@ async def run_task(
                         approval_reason=approval.reason,
                     )
                 )
-                return _finish(trace, approvals, AgentResult(
+                return _finish(trace, approvals, checkpoint_store, checkpoint, AgentResult(
                     ok=False,
                     stop_reason=StopReason.APPROVAL_REQUIRED,
                     message=f"approval required: {approval.request_id}",
@@ -213,7 +244,7 @@ async def run_task(
                     if status is ApprovalStatus.REJECTED
                     else StopReason.CANCELLED
                 )
-                return _finish(trace, approvals, AgentResult(
+                return _finish(trace, approvals, checkpoint_store, checkpoint, AgentResult(
                     ok=False,
                     stop_reason=stop_reason,
                     message=f"approval {status}: {approval.request_id}",
@@ -221,7 +252,22 @@ async def run_task(
                     tokens_used=tokens_used,
                 ))
 
+        if checkpoint and assessment.level is RiskLevel.HIGH:
+            checkpoint.side_effects[effect_key] = SideEffectRecord(
+                key=effect_key,
+                status=SideEffectStatus.PENDING,
+                action_kind=action.kind,
+                target_name=assessment.target_name,
+                url=observation.url,
+                approval_request_id=approval.request_id if approval else None,
+            )
+            checkpoint_store.save(checkpoint)
+            if trace:
+                trace.write("side_effect_pending", key=effect_key, action=action)
         result = await run_action(session, action)
+        if checkpoint and assessment.level is RiskLevel.HIGH:
+            checkpoint.side_effects[effect_key].status = SideEffectStatus.COMPLETED if result.ok else SideEffectStatus.UNCERTAIN
+            checkpoint_store.save(checkpoint)
         strategy = recovery_strategy(action, result) if not result.ok else None
         if trace:
             trace.write(
@@ -251,10 +297,16 @@ async def run_task(
             approval_reason=assessment.reason if approval else None,
         )
         steps.append(record)
+        if checkpoint and checkpoint_store:
+            checkpoint.next_step = step_no + 1
+            checkpoint.last_url = observation.url
+            checkpoint.tokens_used = tokens_used
+            checkpoint.steps.append(CheckpointStep(step=step_no, url=observation.url, title=observation.title, action_kind=action.kind, ok=result.ok, error_kind=result.error_kind, error=result.error, retry_attempt=retry_attempt))
+            checkpoint_store.save(checkpoint)
 
         if not result.ok and strategy:
             if retry_attempt >= policy.max_retries:
-                return _finish(trace, approvals, AgentResult(
+                return _finish(trace, approvals, checkpoint_store, checkpoint, AgentResult(
                     ok=False,
                     stop_reason=StopReason.RETRY_EXHAUSTED,
                     message=f"retry limit {policy.max_retries} exhausted: {result.error}",
@@ -284,7 +336,7 @@ async def run_task(
         retry_of_step = None
         pending_recovery = None
 
-    return _finish(trace, approvals, AgentResult(
+    return _finish(trace, approvals, checkpoint_store, checkpoint, AgentResult(
         ok=False,
         stop_reason=StopReason.MAX_STEPS,
         message=f"stopped after {max_steps} steps",
@@ -296,8 +348,15 @@ async def run_task(
 def _finish(
     trace: TraceWriter | None,
     approvals: list[ApprovalRecord],
+    checkpoint_store: CheckpointStore | None,
+    checkpoint: TaskCheckpoint | None,
     result: AgentResult,
 ) -> AgentResult:
+    if checkpoint and checkpoint_store:
+        checkpoint.status = CheckpointStatus.COMPLETED if result.ok else CheckpointStatus.FAILED
+        checkpoint.approvals = approvals
+        checkpoint_store.save(checkpoint)
+        result = result.model_copy(update={"run_id": checkpoint.run_id, "checkpoint_path": str(checkpoint_store.path_for(checkpoint.run_id))})
     result = result.model_copy(update={"approvals": approvals})
     if trace:
         trace.write("task_finished", result=result)

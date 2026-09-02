@@ -4,6 +4,7 @@ from lob_browser.agent.models import AgentResult, Decision, StepRecord, StopReas
 from lob_browser.agent.retry import RetryPolicy
 from lob_browser.agent.scripted import ScriptedDecider
 from lob_browser.approval import ApprovalPolicy, ApprovalStatus, RiskLevel, StaticApprovalHandler
+from lob_browser.runtime import CheckpointStore
 
 __all__ = [
     "AgentResult",
@@ -18,4 +19,5 @@ __all__ = [
     "ApprovalStatus",
     "RiskLevel",
     "StaticApprovalHandler",
+    "CheckpointStore",
 ]

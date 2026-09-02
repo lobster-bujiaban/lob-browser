@@ -127,6 +127,19 @@ async def main() -> None:
                 "message": "download saved with size and sha256",
             }
         )
+        state_results, state_info = await _verify_storage_state(fixtures, root)
+        for result in state_results:
+            writer.write("action_result", task="登录态复用验收", result=result)
+        writer.write("storage_state_saved", task="登录态复用验收", state=state_info)
+        writer.write("storage_state_restored", task="登录态复用验收", ok=True, path=state_info.path)
+        summaries.append(
+            {
+                "task": "登录态复用验收",
+                "ok": True,
+                "steps": 3,
+                "message": "state saved and restored without exposing credential values",
+            }
+        )
         print(json.dumps(summaries, ensure_ascii=False, indent=2))
         print(f"trace={trace}")
     finally:
@@ -428,6 +441,79 @@ async def _verify_infinite_scroll(session: BrowserSession, fixtures: Path):
     if limited.error_kind is not ErrorKind.SCROLL_LIMIT:
         raise SystemExit(f"expected scroll_limit, got {limited.error_kind}")
     return [found, limited]
+
+
+async def _verify_storage_state(fixtures: Path, root: Path):
+    page_bytes = (fixtures / "state.html").read_bytes()
+    server = await asyncio.start_server(
+        lambda reader, writer: _serve_fixture(reader, writer, page_bytes),
+        "127.0.0.1",
+        0,
+    )
+    port = server.sockets[0].getsockname()[1]
+    url = f"http://127.0.0.1:{port}/state.html"
+    first = BrowserSession(SessionConfig(headless=True, artifact_dir=root / "artifacts"))
+    results = []
+    try:
+        await first.start()
+        await first.page.goto(url)
+        observation = await observe(first)
+        login = observation.find_name("模拟登录")
+        assert login is not None
+        clicked = await run_action(
+            first,
+            Action.click(index=login.index, observation_id=observation.observation_id),
+        )
+        if not clicked.ok:
+            raise SystemExit(f"state setup failed: {clicked.error}")
+        results.append(clicked)
+        ready = await run_action(first, Action.wait_for_text("登录态已恢复", timeout_ms=2_000))
+        if not ready.ok:
+            raise SystemExit(f"state setup confirmation failed: {ready.error}")
+        results.append(ready)
+        state_info = await first.save_storage_state()
+    finally:
+        await first.close()
+
+    second = BrowserSession(
+        SessionConfig(
+            headless=True,
+            artifact_dir=root / "artifacts",
+            storage_state_path=Path(state_info.path),
+        )
+    )
+    try:
+        await second.start()
+        await second.page.goto(url)
+        restored = await run_action(second, Action.wait_for_text("登录态已恢复", timeout_ms=2_000))
+        if not restored.ok:
+            raise SystemExit(f"storage state restore failed: {restored.error}")
+        results.append(restored)
+    finally:
+        await second.close()
+        server.close()
+        await server.wait_closed()
+    return results, state_info
+
+
+async def _serve_fixture(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    body: bytes,
+) -> None:
+    try:
+        await reader.readuntil(b"\r\n\r\n")
+        headers = (
+            b"HTTP/1.1 200 OK\r\n"
+            b"Content-Type: text/html; charset=utf-8\r\n"
+            + f"Content-Length: {len(body)}\r\n".encode()
+            + b"Connection: close\r\n\r\n"
+        )
+        writer.write(headers + body)
+        await writer.drain()
+    finally:
+        writer.close()
+        await writer.wait_closed()
 
 
 if __name__ == "__main__":

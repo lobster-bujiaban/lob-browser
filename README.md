@@ -82,6 +82,8 @@ open Shadow DOM 会递归观察，元素携带宿主 `shadow_path`；Playwright 
 
 无限滚动支持滚动直到文本或元素出现，并通过 `max_scrolls` 与 `settle_ms` 限制次数和异步稳定窗口；目标始终未出现时返回 `scroll_limit`，不会无界滚动。
 
+BrowserContext 可通过显式 `storage_state_path` 恢复登录态；保存状态只写入 `artifacts/<session_id>/state/` 且权限为 `0600`，对外仅返回路径、大小和 SHA-256，不读取或写入 Trace 中的 cookie/localStorage 内容。
+
 ## 项目边界
 
 - `lob-browser` 关注网页任务执行，不重复实现 `lob-harness` 的通用 Agent 运行框架。

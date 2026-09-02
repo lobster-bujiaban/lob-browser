@@ -18,6 +18,7 @@ class SessionConfig(BaseModel):
     artifact_dir: Path = Path("artifacts")
     upload_roots: list[Path] = Field(default_factory=list)
     max_upload_bytes: int = 10 * 1024 * 1024
+    storage_state_path: Path | None = None
 
 
 class TabInfo(BaseModel):
@@ -48,6 +49,12 @@ class DownloadInfo(BaseModel):
 class UploadInfo(BaseModel):
     path: str
     filename: str
+    size: int
+    sha256: str
+
+
+class StorageStateInfo(BaseModel):
+    path: str
     size: int
     sha256: str
 

@@ -30,7 +30,7 @@ from uuid import uuid4
 from playwright.async_api import Browser, BrowserContext, Dialog, Download, Page, Playwright, async_playwright
 
 from lob_browser.browser.errors import LastTabError, SessionError, SessionNotStartedError, TabNotFoundError
-from lob_browser.browser.models import DialogInfo, DownloadInfo, SessionConfig, SessionInfo, TabInfo
+from lob_browser.browser.models import DialogInfo, DownloadInfo, SessionConfig, SessionInfo, StorageStateInfo, TabInfo
 
 logger = logging.getLogger("lob_browser.browser")
 
@@ -173,6 +173,21 @@ class BrowserSession:
         """Close this context. Kill Chromium only if this session launched it."""
         async with self._start_lock:
             await self._cleanup_unlocked()
+
+    async def save_storage_state(self) -> StorageStateInfo:
+        """Persist context state without returning cookies or localStorage values."""
+        if self._context is None:
+            raise SessionNotStartedError("session is not started")
+        state_dir = self._config.artifact_dir.resolve() / self._session_id / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        target = state_dir / "storage-state.json"
+        await self._context.storage_state(path=str(target))
+        target.chmod(0o600)
+        return StorageStateInfo(
+            path=str(target),
+            size=target.stat().st_size,
+            sha256=await asyncio.to_thread(_sha256, target),
+        )
 
     def info(self) -> SessionInfo:
         tabs = [
@@ -384,11 +399,20 @@ class BrowserSession:
             async with asyncio.timeout(timeout_ms / 1000):
                 browser = await self._playwright.chromium.connect_over_cdp(cdp_url, timeout=timeout_ms)
             # New context, never the default one attached via CDP. That is the isolation boundary.
+            storage_state = None
+            if self._config.storage_state_path is not None:
+                try:
+                    storage_state = str(self._config.storage_state_path.expanduser().resolve(strict=True))
+                except OSError as exc:
+                    raise SessionError(
+                        f"storage state file not found: {self._config.storage_state_path}"
+                    ) from exc
             context = await browser.new_context(
                 viewport={
                     "width": self._config.viewport_width,
                     "height": self._config.viewport_height,
                 },
+                storage_state=storage_state,
             )
             context.set_default_timeout(timeout_ms)
             context.on("page", self._on_new_page)

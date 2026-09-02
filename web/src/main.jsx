@@ -13,6 +13,7 @@ function App() {
   const [running, setRunning] = useState(false);
   const [messages, setMessages] = useState([]);
   const [detail, setDetail] = useState(null);
+  const [mode, setMode] = useState("auto");
 
   useEffect(() => {
     fetch("/api/tasks")
@@ -108,7 +109,7 @@ function App() {
     setRunning(true);
     try {
       const endpoint = current?.status === "idle" ? `/api/tasks/${current.id}/run` : "/api/tasks";
-      const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: text }) });
+      const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: text, mode }) });
       if (!response.ok) throw new Error("任务服务不可用");
       const saved = await response.json();
       setMessages((items) => [...items, { role: "assistant", text: "任务已提交，正在启动浏览器 Agent。" }]);
@@ -121,7 +122,7 @@ function App() {
 
   return <div className="app">
     <aside className="app-sidebar"><h1>⌁ LOB Browser</h1><button onClick={() => { setNewTaskTitle(""); setNewTaskOpen(true); }}>＋ 新建任务</button><h4>最近任务 <button onClick={clearTasks}>清空</button></h4>{tasks.map((task) => <div className={`task-row ${current?.id === task.id ? "active" : ""}`} key={task.id} onClick={() => openTask(task)}><p>{task.title}<small>{task.status}</small></p><div className="task-actions"><button onClick={(event) => renameTask(event, task)} title="重命名">✎</button><button onClick={(event) => removeTask(event, task)} title="删除任务">×</button></div></div>)}</aside>
-    <main><header><small>BROWSER AGENT</small><h2>{current?.title || "新建浏览器任务"}</h2></header><div className="content"><section className="chat"><div className="messages">{!current && <div className="welcome"><b>让浏览器替你完成网页任务</b><em>先新建一个任务会话，再通过聊天消息启动 Agent。</em></div>}{messages.map((message, index) => <div className={`message ${message.role}`} key={index}><strong>{message.role === "user" ? "你" : "LOB Agent"}</strong><p>{message.text}</p></div>)}</div><div className="composer-area"><div className="suggestions">{suggestions.map((item) => <button key={item} onClick={() => setDraft(item)}>{item}</button>)}</div><form className="composer" onSubmit={sendMessage}><textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="描述你想让浏览器完成的任务…" rows="3"/><div><span>新建任务只创建会话，发送消息后才开始执行</span><button disabled={!draft.trim() || running}>发送 ↑</button></div></form></div></section><RunPanel detail={detail} running={running} current={current}/></div></main>
+    <main><header><small>BROWSER AGENT</small><h2>{current?.title || "新建浏览器任务"}</h2></header><div className="content"><section className="chat"><div className="messages">{!current && <div className="welcome"><b>让浏览器替你完成网页任务</b><em>先新建一个任务会话，再通过聊天消息启动 Agent。</em></div>}{messages.map((message, index) => <div className={`message ${message.role}`} key={index}><strong>{message.role === "user" ? "你" : "LOB Agent"}</strong><p>{message.text}</p></div>)}</div><div className="composer-area"><div className="suggestions">{suggestions.map((item) => <button key={item} onClick={() => setDraft(item)}>{item}</button>)}</div><form className="composer" onSubmit={sendMessage}><textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="描述你想让浏览器完成的任务…" rows="3"/><div><span>新建任务只创建会话，发送消息后才开始执行</span><div className="composer-actions"><select value={mode} onChange={(event) => setMode(event.target.value)}><option value="auto">Auto</option><option value="agent">Agent</option><option value="crawl">Crawl</option></select><button disabled={!draft.trim() || running}>发送 ↑</button></div></div></form></div></section><RunPanel detail={detail} running={running} current={current}/></div></main>
     {newTaskOpen && <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setNewTaskOpen(false)}><div className="modal"><button className="close" onClick={() => setNewTaskOpen(false)}>×</button><small>NEW SESSION</small><h2>新建任务会话</h2><p>创建一个空白浏览器会话。此操作不会执行网页任务。</p><label className="field-label">任务名称</label><input className="task-name-input" autoFocus value={newTaskTitle} onChange={(event) => setNewTaskTitle(event.target.value)} onKeyDown={(event) => event.key === "Enter" && createEmptyTask()} placeholder="例如：采集导航站网址" maxLength="80"/><div className="modal-actions"><button onClick={() => setNewTaskOpen(false)}>取消</button><button className="primary" disabled={!newTaskTitle.trim()} onClick={createEmptyTask}>创建任务</button></div></div></div>}
   </div>;
 }

@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 import asyncio
 import os
+from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI, HTTPException, Request
@@ -11,12 +12,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from lob_browser.agent import run_task
+from lob_browser.agent.crawl import GenericCrawler
 from lob_browser.browser import BrowserSession, SessionConfig
-from lob_browser.providers.openai import OpenAICompatibleDecider
+from lob_browser.providers.openai import OpenAICompatibleDecider, plan_crawl
 from .db import connect, create_empty_task, create_task, delete_task, delete_tasks, init, prepare_task, rename_task, save_collected_items, save_steps, set_task_status, task, tasks
 
 class CreateTask(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000)
+    mode: Literal["auto", "agent", "crawl"] = "auto"
 
 class TaskTitle(BaseModel):
     title: str = Field(min_length=1, max_length=80)
@@ -55,7 +58,7 @@ async def health(request: Request):
 async def new_task(body: CreateTask, request: Request):
     task_id = uuid4()
     await create_task(request.app.state.db, task_id, body.prompt)
-    asyncio.create_task(_execute_task(request.app.state.db, task_id, body.prompt))
+    asyncio.create_task(_execute_task(request.app.state.db, task_id, body.prompt, body.mode))
     return await task(request.app.state.db, task_id)
 
 @app.post("/api/tasks/empty", status_code=201)
@@ -68,7 +71,7 @@ async def new_empty_task(body: TaskTitle, request: Request):
 async def run_existing_task(task_id: UUID, body: CreateTask, request: Request):
     if not await prepare_task(request.app.state.db, task_id, body.prompt):
         raise HTTPException(404, "task not found")
-    asyncio.create_task(_execute_task(request.app.state.db, task_id, body.prompt))
+    asyncio.create_task(_execute_task(request.app.state.db, task_id, body.prompt, body.mode))
     return await task(request.app.state.db, task_id)
 
 @app.get("/api/tasks")
@@ -96,17 +99,20 @@ async def update_task_title(task_id: UUID, body: TaskTitle, request: Request):
         raise HTTPException(404, "task not found")
     return await task(request.app.state.db, task_id)
 
-async def _execute_task(pool, task_id: UUID, prompt: str) -> None:
-    if not os.environ.get("OPENAI_API_KEY"):
+async def _execute_task(pool, task_id: UUID, prompt: str, mode: str = "auto") -> None:
+    plan = await plan_crawl(prompt) if mode in {"auto", "crawl"} else None
+    if plan is None and not os.environ.get("OPENAI_API_KEY"):
         await set_task_status(pool, task_id, "failed", "模型未配置：请在 .env 设置 OPENAI_API_KEY、OPENAI_MODEL 和 OPENAI_BASE_URL")
         return
     await set_task_status(pool, task_id, "running", "Agent 正在启动浏览器")
     session = BrowserSession(SessionConfig(headless=True))
     try:
+        decider = GenericCrawler(plan) if plan is not None else OpenAICompatibleDecider()
         await session.start()
         async def persist_steps(steps):
             await save_steps(pool, task_id, _step_rows(steps))
-        result = await run_task(session, prompt, OpenAICompatibleDecider(), max_steps=12, trace_path=f"artifacts/{task_id}.jsonl", on_steps=persist_steps)
+        max_steps = min(52, plan.max_pages + 2) if plan is not None else 12
+        result = await run_task(session, prompt, decider, max_steps=max_steps, trace_path=f"artifacts/{task_id}.jsonl", on_steps=persist_steps)
         rows = _step_rows(result.steps)
         await save_steps(pool, task_id, rows)
         await save_collected_items(pool, task_id, [item.model_dump() for item in result.collected_items])

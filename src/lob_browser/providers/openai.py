@@ -10,11 +10,13 @@ import os
 import re
 import urllib.error
 import urllib.request
+from urllib.parse import urljoin, urlparse
 
 from pydantic import BaseModel
 
 from lob_browser.actions import Action, ActionKind
 from lob_browser.agent.models import CollectedItem, Decision, StepRecord
+from lob_browser.agent.crawl import CrawlPlan
 from lob_browser.observation import Observation
 
 _SYSTEM = """You are a browser agent. Return exactly one JSON object per turn.
@@ -54,6 +56,7 @@ class OpenAICompatibleDecider:
         self.base_url = (base_url or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")).rstrip("/")
         self._collected_links: dict[str, CollectedItem] = {}
         self._pending_sections: list[str] | None = None
+        self._pending_category_urls: list[str] | None = None
 
     async def __call__(self, task: str, observation: Observation, history: list[StepRecord]) -> Decision:
         if not self.api_key:
@@ -65,6 +68,9 @@ class OpenAICompatibleDecider:
         extracted = _deterministic_extraction(self, task, observation)
         if extracted is not None:
             return extracted
+        hierarchical = _hierarchical_site_extraction(self, task, observation)
+        if hierarchical is not None:
+            return hierarchical
         payload = {
             "model": self.model,
             "temperature": 0,
@@ -83,6 +89,10 @@ class OpenAICompatibleDecider:
         if action_data.kind is None:
             compact = content.replace("\n", " ")[:300]
             return Decision(thought=parsed.thought, done=True, success=False, message=f"model returned no action: {compact}")
+        if action_data.kind is ActionKind.CLICK and action_data.index is not None:
+            target = observation.element(action_data.index)
+            if target and target.tag == "a" and target.href and target.href != "#":
+                return Decision(thought=f"use stable link navigation instead of clicking stale index {action_data.index}", action=Action.navigate(urljoin(observation.url, target.href)))
         action = Action(
             kind=action_data.kind,
             url=action_data.url,
@@ -138,6 +148,40 @@ def _deterministic_extraction(decider: OpenAICompatibleDecider, task: str, obser
     return Decision(thought="all requested links are available in the current observation", done=True, success=True, message=message, collected_items=collected)
 
 
+def _hierarchical_site_extraction(decider: OpenAICompatibleDecider, task: str, observation: Observation) -> Decision | None:
+    normalized = task.replace(" ", "").lower()
+    if not any(term in normalized for term in ("所有二级独立站点", "全部二级独立站点", "所有独立站点")):
+        return None
+    page_host = urlparse(observation.url).hostname
+    for item in observation.elements:
+        if not item.href or item.href == "#":
+            continue
+        absolute = urljoin(observation.url, item.href)
+        target_host = urlparse(absolute).hostname
+        if target_host and target_host != page_host and item.bbox and item.bbox.y > 280:
+            decider._collected_links.setdefault(absolute, CollectedItem(url=absolute, title=item.name or None))
+
+    if decider._pending_category_urls is None:
+        category_urls = []
+        for item in observation.elements:
+            if item.class_name == "col_item_link" and item.href:
+                absolute = urljoin(observation.url, item.href)
+                if absolute not in category_urls:
+                    category_urls.append(absolute)
+        decider._pending_category_urls = category_urls
+
+    while decider._pending_category_urls:
+        target = decider._pending_category_urls.pop(0)
+        if target.rstrip("/") != observation.url.rstrip("/"):
+            return Decision(thought=f"visit the next category page: {target}", action=Action.navigate(target))
+
+    collected = list(decider._collected_links.values())
+    if not collected:
+        return Decision(done=True, success=False, message="未在分类正文区域发现二级独立站点")
+    message = f"共采集到 {len(collected)} 个二级独立站点：\n" + "\n".join(f"{index}. {item.title or '未命名'} — {item.url}" for index, item in enumerate(collected, 1))
+    return Decision(thought="all category pages have been visited", done=True, success=True, message=message, collected_items=collected)
+
+
 async def _post_json(url: str, payload: dict, api_key: str) -> dict:
     import asyncio
 
@@ -161,3 +205,41 @@ async def _post_json(url: str, payload: dict, api_key: str) -> dict:
             raise RuntimeError(f"model HTTP {exc.code}: {detail[:300]}") from exc
 
     return await asyncio.to_thread(_send)
+
+
+async def plan_crawl(task: str) -> CrawlPlan | None:
+    normalized = task.lower()
+    if not any(term in normalized for term in ("采集", "抓取", "爬取", "遍历", "所有网址", "所有链接", "crawl", "scrape")):
+        return None
+    match = re.search(r"https?://[^\s，。；;]+", task)
+    if not match:
+        return None
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+    fallback = CrawlPlan(
+        start_url=match.group(0),
+        max_depth=1 if any(term in normalized for term in ("二级", "分类", "栏目", "所有")) else 0,
+        max_pages=20,
+        collect_external_only=any(term in normalized for term in ("独立站点", "外部站点", "外链")),
+        collect_url_pattern="list." if any(term in normalized for term in ("所有列表页", "全部列表页", "列表页面")) else None,
+    )
+    if not api_key:
+        return fallback
+    payload = {
+        "model": os.environ.get("OPENAI_MODEL", "gpt-4.1-mini"),
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {"role": "system", "content": "Convert web collection requests into a bounded crawl plan JSON with keys: start_url, max_depth (0-3), max_pages (1-50), collect_external_only, follow_same_origin, fields, collect_url_pattern (optional substring such as list.). Return {\"crawl\":false} when the request is an interactive browser task rather than collection."},
+            {"role": "user", "content": task},
+        ],
+    }
+    try:
+        data = await _post_json(f"{os.environ.get('OPENAI_BASE_URL', 'https://api.openai.com/v1').rstrip('/')}/chat/completions", payload, api_key)
+        parsed = json.loads(data["choices"][0]["message"]["content"])
+        if parsed.get("crawl") is False:
+            return None
+        if fallback.collect_url_pattern and not parsed.get("collect_url_pattern"):
+            parsed["collect_url_pattern"] = fallback.collect_url_pattern
+        return CrawlPlan.model_validate({**fallback.model_dump(), **parsed})
+    except Exception:
+        return fallback

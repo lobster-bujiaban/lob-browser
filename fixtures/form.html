@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>表单任务</title></head>
+<body>
+  <h1>报名表</h1>
+  <form id="form">
+    <label>姓名 <input name="name" aria-label="姓名"></label>
+    <label>方向 <select name="track" aria-label="方向"><option value="browser">浏览器 Agent</option><option value="graph">图工作流</option></select></label>
+    <button type="submit">提交</button>
+  </form>
+  <p id="result" role="status"></p>
+  <script>
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const data = new FormData(form);
+      result.textContent = data.get('name') === '小龙' && data.get('track') === 'browser' ? '提交成功' : '提交内容不正确';
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>登录态复用任务</title></head>
+<body>
+  <h1>会话状态</h1>
+  <button id="login">模拟登录</button>
+  <p id="status" role="status"></p>
+  <script>
+    const status = document.querySelector('#status');
+    const render = () => { status.textContent = localStorage.getItem('lob_session') === 'active' ? '登录态已恢复' : '尚未登录'; };
+    document.querySelector('#login').addEventListener('click', () => {
+      localStorage.setItem('lob_session', 'active');
+      render();
+    });
+    render();
+  </script>
+</body>
+</html>

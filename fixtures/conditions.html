@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>业务条件等待</title></head>
+<body>
+  <h1>异步业务状态</h1>
+  <button id="start">开始异步处理</button>
+  <condition-result id="condition-result"></condition-result>
+  <script>
+    class ConditionResult extends HTMLElement {
+      connectedCallback() {
+        this.attachShadow({mode: 'open'}).innerHTML = '<p id="status">等待开始</p><div id="actions"></div>';
+      }
+    }
+    customElements.define('condition-result', ConditionResult);
+    document.querySelector('#start').addEventListener('click', () => {
+      const root = document.querySelector('#condition-result').shadowRoot;
+      setTimeout(() => { root.querySelector('#status').textContent = '处理完成'; }, 700);
+      setTimeout(() => { root.querySelector('#actions').innerHTML = '<button id="ready-action">可继续操作</button>'; }, 900);
+      setTimeout(() => { location.hash = 'done'; }, 1100);
+    });
+  </script>
+</body>
+</html>

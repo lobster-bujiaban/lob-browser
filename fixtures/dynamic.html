@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>动态列表</title></head>
+<body>
+  <h1>项目搜索</h1>
+  <div id="controls"><input id="query" aria-label="搜索词"><button id="search">搜索</button></div>
+  <p id="status" role="status">等待搜索</p>
+  <ul id="results"></ul>
+  <script>
+    const searchButton = document.querySelector('#search');
+    const statusText = document.querySelector('#status');
+    const controlsBox = document.querySelector('#controls');
+    const resultList = document.querySelector('#results');
+    searchButton.addEventListener('click', () => {
+      statusText.textContent = '加载中';
+      setTimeout(() => {
+        controlsBox.innerHTML = '<input id="query" aria-label="搜索词"><button id="search-again">再次搜索</button>';
+        resultList.innerHTML = '<li><a href="detail.html">LOB Browser</a></li><li>LOB Graph</li>';
+        statusText.textContent = '加载完成';
+      }, 150);
+    });
+  </script>
+</body>
+</html>

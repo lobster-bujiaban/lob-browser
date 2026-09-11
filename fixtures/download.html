@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>下载任务</title></head>
+<body>
+  <h1>下载产物</h1>
+  <button id="download">下载报告</button>
+  <script>
+    document.querySelector('#download').addEventListener('click', () => {
+      const content = 'LOB Browser download fixture\ntask=LOB-DOWNLOAD-001\n';
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(new Blob([content], {type: 'text/plain'}));
+      link.download = 'lob-report.txt';
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    });
+  </script>
+</body>
+</html>

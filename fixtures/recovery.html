@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>失败恢复任务</title></head>
+<body>
+  <h1>元素替换恢复</h1>
+  <button id="target">执行恢复目标</button>
+  <p id="status" role="status">等待执行</p>
+  <script>
+    document.addEventListener('click', (event) => {
+      if (event.target.id === 'target') document.querySelector('#status').textContent = '恢复成功';
+    });
+  </script>
+</body>
+</html>

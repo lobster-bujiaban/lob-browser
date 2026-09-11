@@ -1,0 +1,1 @@
+{"name":"lob-browser-web","private":true,"version":"0.1.0","type":"module","scripts":{"dev":"vite --host 127.0.0.1","build":"vite build"},"dependencies":{"@vitejs/plugin-react":"latest","react":"latest","react-dom":"latest","vite":"latest"}}

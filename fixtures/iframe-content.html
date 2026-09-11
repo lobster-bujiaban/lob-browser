@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>iframe 内容</title></head>
+<body>
+  <form id="frame-form">
+    <label>iframe 姓名 <input aria-label="iframe 姓名" name="name"></label>
+    <button type="submit">iframe 提交</button>
+  </form>
+  <a href="detail.html" target="_blank">iframe 详情</a>
+  <p id="result" role="status">等待提交</p>
+  <script>
+    document.querySelector('#frame-form').addEventListener('submit', (event) => {
+      event.preventDefault();
+      const name = new FormData(event.currentTarget).get('name');
+      document.querySelector('#result').textContent = name === '小框' ? 'iframe 提交成功' : 'iframe 内容错误';
+    });
+  </script>
+</body>
+</html>

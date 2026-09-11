@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>Shadow DOM 任务</title></head>
+<body>
+  <h1>Shadow DOM 容器</h1>
+  <shadow-task id="shadow-task"></shadow-task>
+  <script>
+    class ShadowTask extends HTMLElement {
+      connectedCallback() {
+        const root = this.attachShadow({mode: 'open'});
+        root.innerHTML = `
+          <form id="form">
+            <label>Shadow 姓名 <input aria-label="Shadow 姓名" name="name"></label>
+            <button type="submit">Shadow 提交</button>
+          </form>
+          <a href="detail.html" target="_blank">Shadow 详情</a>
+          <p id="result">等待提交</p>`;
+        root.querySelector('#form').addEventListener('submit', (event) => {
+          event.preventDefault();
+          const value = new FormData(event.currentTarget).get('name');
+          root.querySelector('#result').textContent = value === '小影' ? 'Shadow 提交成功' : 'Shadow 内容错误';
+        });
+      }
+    }
+    customElements.define('shadow-task', ShadowTask);
+  </script>
+</body>
+</html>

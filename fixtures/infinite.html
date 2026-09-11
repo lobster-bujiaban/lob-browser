@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><title>无限滚动任务</title>
+  <style>li { min-height: 180px; border-bottom: 1px solid #ddd; }</style>
+</head>
+<body>
+  <h1>懒加载记录</h1>
+  <ol id="records"></ol>
+  <p id="loading">继续滚动加载</p>
+  <script>
+    const list = document.querySelector('#records');
+    let loaded = 0;
+    let loading = false;
+    function appendBatch() {
+      for (let i = 0; i < 6; i += 1) {
+        loaded += 1;
+        const item = document.createElement('li');
+        item.textContent = loaded === 18 ? '目标记录 LOB-042' : `普通记录 ${loaded}`;
+        if (loaded === 18) item.id = 'target-record';
+        list.appendChild(item);
+      }
+    }
+    appendBatch();
+    addEventListener('scroll', () => {
+      if (loading || innerHeight + scrollY < document.body.scrollHeight - 60 || loaded >= 18) return;
+      loading = true;
+      setTimeout(() => { appendBatch(); loading = false; }, 80);
+    });
+  </script>
+</body>
+</html>
